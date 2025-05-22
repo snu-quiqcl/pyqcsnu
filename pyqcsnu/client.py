@@ -24,12 +24,11 @@ from .exceptions import (
 class SNUQ:
     """Client for interacting with the SNU quantum computing services API."""
     
-    # Default base URL - can be overridden by environment variable
-    DEFAULT_BASE_URL = "http://localhost:8000"
+    # Default base URL - will be overridden by environment variable
+    BASE_URL = "http://localhost:8000"
     
     def __init__(
         self,
-        base_url: Optional[str] = None,
         token: Optional[str] = None,
         timeout: int = 30,
         verify_ssl: bool = True
@@ -45,9 +44,7 @@ class SNUQ:
             verify_ssl: Whether to verify SSL certificates
         """
         # Get base URL from environment variable if not provided
-        self.base_url = (base_url or 
-                        os.environ.get("PYQCSNU_BASE_URL") or 
-                        self.DEFAULT_BASE_URL).rstrip('/')
+        self.base_url = self.BASE_URL
         
         self.token = token
         self.timeout = timeout
@@ -119,7 +116,7 @@ class SNUQ:
         self.set_token(token)
         # Verify token is valid by making a simple request
         try:
-            self._make_request("GET", "/api/hardware/backends/")
+            self._make_request("GET", "/api/hardware/")
         except AuthenticationError:
             self.token = None
             self.session.headers.pop("Authorization", None)
@@ -203,7 +200,7 @@ class SNUQ:
         self,
         circuit: Union[QuantumCircuit, Dict, str],
         backend: str,
-        shots: int = 1000,
+        shots: int = 1024,
         mitigation_params: Optional[MitigationParams] = None,
         name: Optional[str] = None
     ) -> BlackholeJob:
@@ -250,7 +247,7 @@ class SNUQ:
         else:
             raise ValueError("Circuit must be a QuantumCircuit, a dict (or JSON string) with a 'qasm' key.")
         # Prepare job data (using a dict with a 'qasm' key)
-        job_data = { "circuit": { "qasm": qasm }, "backend": backend, "shots": shots }
+        job_data = { "circuit_info": qasm, "backend": backend, "shots": shots }
         if mitigation_params:
             job_data["mitigation_params"] = mitigation_params.to_dict()
         if name:
@@ -396,25 +393,29 @@ class SNUQ:
     # Backend Management Methods
     def list_backends(self) -> List[SNUBackend]:
         """
-        List all available quantum computing backends.
-        
-        Returns:
-            List of SNUBackend objects
-        """
-        response = self._make_request("GET", "/api/hardware/backends/")
-        return [SNUBackend.from_dict(backend_data) for backend_data in response]
+        Retrieve every hardware record.
 
-    def get_backend_status(self, backend_name: str) -> Dict:
+        Returns
+        -------
+        List[SNUBackend]
+            Each item has .name, .graph_data, .pending_jobs (and legacy fields = None).
         """
-        Get current status of a specific backend.
-        
-        Args:
-            backend_name: Name of the backend
-            
-        Returns:
-            Dictionary containing backend status information
+        response = self._make_request("GET", "/api/hardware/")
+        return [SNUBackend.from_dict(obj) for obj in response]
+
+
+    def get_backend_status(self, backend_name: str) -> Dict[str, Any]:
         """
-        return self._make_request("GET", f"/api/hardware/status/{backend_name}/")
+        Get live job-queue length for a single backend.
+
+        The `hardware-status` view is mounted at `/api/hardware/status/`
+        and expects `?name=<backend>` as a query parameter.
+        """
+        return self._make_request(
+            "GET",
+            "/api/hardware/status/",
+            params={"name": backend_name},
+        )
     
     def run(
         self,
@@ -485,8 +486,8 @@ class SNUQ:
         bh_res: BlackholeResult = res_or_err
         result_dict = {
             "backend_name": backend,
-            "backend_version": "0.0.1",          # update if your API exposes this
-            "qobj_id": None,
+            "backend_version": "0.0.1",
+            #"qobj_id": None,    # deprecated in Qiskit 2.x
             "job_id": str(job.id),
             "success": True,
             "results": [

@@ -6,7 +6,6 @@ __version__ = "0.1.0"
 
 from .client import SNUQ
 from .models import (
-    QCircuit,
     BlackholeJob,
     BlackholeExperiment,
     BlackholeResult,
@@ -23,7 +22,6 @@ from .exceptions import (
 
 __all__ = [
     'SNUQ',
-    'QCircuit',
     'BlackholeJob',
     'BlackholeExperiment',
     'BlackholeResult',

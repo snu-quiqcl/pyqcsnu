@@ -4,8 +4,8 @@
 
 ---
 
-`pyqcsnu` lets you talk to the REST API that powers QuIQCL
-quantum‑computing cluster from pure Python.  With a single import you can
+`PyQCSNU` lets you talk to the REST API that powers QuIQCL
+quantum‑computing services from pure Python.  With a single import you can
 
 * authenticate against the service,
 * submit **Qiskit** circuits as jobs,
@@ -59,14 +59,6 @@ print(result.get_counts())  # {'00': 1012, '11': 1036}
 ```
 
 ---
-
-## Library layout
-
-```
-pyqcsnu/
-├── client.py   # SNUQ: the main API client
-└── models.py   # Pydantic data models used throughout
-```
 
 ### `SNUQ` essentials
 
@@ -124,7 +116,7 @@ if job.status != "completed":
 from pyqcsnu.exceptions import AuthenticationError, JobError
 
 try:
-    result = client.run(qc, backend="faulty_backend")
+    result = client.run(qc, backend="faulty_backend")   # qiskit.result.Result instance
 except AuthenticationError:
     print("⚠️  Please log in first.")
 except JobError as e:
@@ -133,10 +125,10 @@ except JobError as e:
 
 ---
 
-## Contributing
+## Development
 
-Issues and pull requests are welcome!  Clone the repo, create a virtualenv, run
-`make dev` to install dev dependencies, and open a PR against `main`.
+* Minwoo Kim
+- Dept. of Computer Science & Engineering, Seoul National Univeristy
 
 ---
 

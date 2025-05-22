@@ -1,8 +1,8 @@
 requests>=2.31.0
 numpy>=1.24.0
 scipy>=1.10.0
-qiskit>=1.0.0  # For quantum circuit handling
-pydantic>=2.0.0  # For data validation and settings management
+qiskit>=1.0.0 
+pydantic>=2.0.0  
 python-dateutil>=2.8.2  # For datetime handling
 typing-extensions>=4.5.0  # For enhanced type hints
 urllib3>=2.0.0  # Required by requests
@@ -10,5 +10,3 @@ certifi>=2023.7.22  # Required by requests
 charset-normalizer>=3.0.0  # Required by requests
 idna>=3.4  # Required by requests
 python-dotenv>=1.0.0
-qiskit-terra>=0.25.0  # For circuit operations
-qiskit-aer>=0.13.0  # For local simulation
