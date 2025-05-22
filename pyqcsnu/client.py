@@ -84,7 +84,7 @@ class SNUQ:
         Raises:
             AuthenticationError: If login fails
         """
-        url = f"{self.base_url}/api/token/"
+        url = f"{self.base_url}/api/user/login/"
         try:
             response = self.session.post(
                 url,
@@ -96,7 +96,7 @@ class SNUQ:
             if response.status_code == 200:
                 data = response.json()
                 self.set_token(data["token"])
-                return True
+                return 'success'
             else:
                 raise AuthenticationError(f"Login failed: {response.text}")
                 
