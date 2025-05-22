@@ -1,6 +1,31 @@
-# PyQCSNU
+# pyqcsnu
 
-Python packages for accessing QuIQCL quantum services
+*A Python client for QuIQCL Quantum‑Computing Services*
+
+---
+
+`pyqcsnu` lets you talk to the REST API that powers QuIQCL
+quantum‑computing cluster from pure Python.  With a single import you can
+
+* authenticate against the service,
+* submit **Qiskit** circuits as jobs,
+* block until the run is finished,
+* and receive results in `qiskit.result.Result` format—ready for all downstream
+  Qiskit tooling.
+
+---
+
+## Features
+
+| Capability                       | What it means for you                                                                           |
+| -------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Plug‑and‑play Qiskit support** | Pass a `QuantumCircuit`, get back a `Result`.                                                   |
+| **High‑level `run()` helper**    | One call: *submit → wait → fetch → convert*.                                                    |
+| **Explicit low‑level API**       | Fine‑grained control via `create_job`, `wait_for_job`, `get_job_results`, …                     |
+| **Typed data models**            | `pydantic` models (`BlackholeJob`, `BlackholeResult`, …) for safe parsing & IDE autocompletion. |
+| **Error classes**                | Clear exception hierarchy: `AuthenticationError`, `JobError`, …                                 |
+
+---
 
 ## Installation
 
@@ -8,185 +33,114 @@ Python packages for accessing QuIQCL quantum services
 pip install pyqcsnu
 ```
 
-For development installation:
+Requires **Python 3.9+** and a network path to the SNU QC service.
 
-```bash
-git clone https://github.com/snu-quiqcl/pyqcsnu.git
-cd pyqcsnu
-pip install -e ".[dev]"
-```
+---
 
-## Configuration
-
-The client can be configured in several ways:
-**Authentication**:
-   - Login with username/password: `client.login(username="user", password="pass")`
-   - Login with token: `client.login_with_token(token="your-token")`
-   - Set token during initialization: `client = QuantumClient(token="your-token")`
-
-## Quick Start
+## Quick start
 
 ```python
-from pyqcsnu import QuantumClient, Circuit
+from qiskit import QuantumCircuit
+from pyqcsnu import SNUQ
 
-# Initialize the client (base URL can be configured via environment variable)
-client = QuantumClient()
+# 1  Connect & authenticate
+client = SNUQ()
+client.login("userid", "userpw")    # or via endowed TOKEN
 
-# Login using one of these methods:
-# 1. Username/password
-client.login(username="your_username", password="your_password")
+# 2  Build a circuit
+qc = QuantumCircuit(2, 2)
+qc.h(0)
+qc.cx(0, 1)
+qc.measure([0, 1], [0, 1])
 
-# 2. Token
-client.login_with_token(token="your-token")
-
-# Create a simple Bell state circuit
-bell_circuit = Circuit(
-    qasm="""
-    OPENQASM 2.0;
-    include "qelib1.inc";
-    
-    qreg q[2];
-    creg c[2];
-    
-    h q[0];
-    cx q[0], q[1];
-    
-    measure q[0] -> c[0];
-    measure q[1] -> c[1];
-    """,
-    name="bell_state"
-)
-
-# Submit the job
-job = client.create_job(
-    circuit=bell_circuit,
-    backend="cassiopeia",
-    shots=1024
-)
-
-# Wait for results with status updates
-def status_callback(status, job_data):
-    print(f"Job status: {status}")
-
-success, result = client.wait_for_job(
-    job_id=job.id,
-    polling_interval=5,
-    timeout=300,
-    status_callback=status_callback
-)
-
-if success:
-    # Get probabilities for each state
-    for bitstring in ["00", "01", "10", "11"]:
-        prob = result.get_probability(bitstring)
-        print(f"P({bitstring}) = {prob:.4f}")
-    
-    # Calculate expectation value for Z⊗Z
-    observable = {
-        "00": 1.0,
-        "01": -1.0,
-        "10": -1.0,
-        "11": 1.0
-    }
-    expectation = result.get_expectation_value(observable)
-    print(f"⟨Z⊗Z⟩ = {expectation:.4f}")
+# 3  Run & get a Qiskit Result
+result = client.run(qc, backend="Cassiopeia", shots=2048)
+print(result.get_counts())  # {'00': 1012, '11': 1036}
 ```
 
-## Features
+---
 
-- **Easy-to-use API**: Simple and intuitive interface for quantum computing operations
-- **Type Safety**: Full type hints and validation
-- **Error Handling**: Comprehensive error handling with custom exceptions
-- **Async Support**: Built-in support for asynchronous operations
-- **Result Processing**: Built-in methods for common quantum computing calculations
-- **Backend Management**: Easy access to backend status and capabilities
+## Library layout
 
-## Advanced Usage
+```
+pyqcsnu/
+├── client.py   # SNUQ: the main API client
+└── models.py   # Pydantic data models used throughout
+```
 
-### Error Mitigation
+### `SNUQ` essentials
+
+| Method                        | Purpose                                             |
+| ----------------------------- | --------------------------------------------------- |
+| `login(username, password)`   | Obtain a token and store it for subsequent calls    |
+| `login_with_token(token)`     | Skip username/password; validate an existing token  |
+| `run(circuit, backend, **kw)` | One‑shot helper that returns `qiskit.result.Result` |
+| `create_job(...)`             | Submit without waiting                              |
+| `wait_for_job(job_id, ...)`   | Poll until *completed*/ *error*/ *timeout*          |
+| `get_job_results(job_id)`     | Fetch `BlackholeResult` only                        |
+
+### Data models (in `models.py`)
+
+* `BlackholeJob`       – job metadata & status
+* `BlackholeResult`    – counts / probabilities / metadata
+* `BlackholeExperiment`– low‑level pulse‑level run information
+* `SNUBackend`         – static & live backend specs
+* `MitigationParams`   – optional error‑mitigation settings
+
+Each model is a Pydantic `BaseModel`, so you can `.model_dump()` them straight
+to JSON or build them via `.model_validate()`.
+
+---
+
+## Advanced usage
+
+### Submit now, fetch later
 
 ```python
-from pyqcsnu import MitigationParams
+job = client.create_job(qc, backend="ion_trap_5q", shots=5000)
+print(job.id, job.status)
 
-# Create a job with error mitigation
-mitigation = MitigationParams(
-    technique="zne",
-    params={
-        "scale_factors": [1.0, 2.0, 3.0],
-        "extrapolator": "linear"
-    }
-)
+# ... do other work ...
 
-job = client.create_job(
-    circuit=circuit,
-    backend="cassiopeia",
-    shots=1024,
-    mitigation_params=mitigation
-)
+if job.status != "completed":
+    ok, result_or_err = client.wait_for_job(job.id, polling_interval=10, timeout=900)
+    if ok:
+        result = result_or_err      # -> BlackholeResult
+    else:
+        raise RuntimeError(result_or_err["error"])
 ```
 
-### Experiment Management
+### Environment variables
+
+| Variable           | Role                                                       |
+| ------------------ | ---------------------------------------------------------- |
+| `PYQCSNU_TOKEN`    | If set, `SNUQ()` will pick it up so you can skip `login()` |
+
+---
+
+## Error handling
 
 ```python
-# Create a pulse-level experiment
-experiment = client.create_experiment(
-    pulse_schedule={
-        "channels": ["ch0", "ch1"],
-        "instructions": [
-            {"name": "delay", "t": 0, "duration": 100},
-            {"name": "pulse", "channel": "ch0", "t": 100, "duration": 50}
-        ]
-    },
-    external_run_id=12345
-)
+from pyqcsnu.exceptions import AuthenticationError, JobError
 
-# Get experiment status
-experiment = client.get_experiment(experiment.id)
-print(f"Experiment status: {experiment.status}")
+try:
+    result = client.run(qc, backend="faulty_backend")
+except AuthenticationError:
+    print("⚠️  Please log in first.")
+except JobError as e:
+    print("Job failed:", e)
 ```
 
-### Backend Management
-
-```python
-# List available backends
-backends = client.list_backends()
-for backend in backends:
-    print(f"Backend: {backend.name}")
-    print(f"Status: {backend.status}")
-    print(f"Qubits: {backend.n_qubits}")
-    print("---")
-
-# Get backend calibration data
-calibration = client.get_backend_calibration("cassiopeia")
-print("Calibration data:", calibration)
-```
-
-## Development
-
-### Running Tests
-
-```bash
-pytest
-```
-
-### Code Style
-
-```bash
-# Format code
-black .
-isort .
-
-# Type checking
-mypy .
-
-# Linting
-flake8
-```
-
-## License
-
-MIT License
+---
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Issues and pull requests are welcome!  Clone the repo, create a virtualenv, run
+`make dev` to install dev dependencies, and open a PR against `main`.
+
+---
+
+## License
+
+`pyqcsnu` is released under the **MIT License**.  See [LICENSE](LICENSE) for
+full text.

@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Union, Tuple, Any
 import requests
 from requests.exceptions import RequestException
 from qiskit import QuantumCircuit
+from datetime import datetime
+from qiskit.result import Result
 
 from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams
 from .exceptions import (
@@ -413,3 +415,95 @@ class SNUQ:
             Dictionary containing backend status information
         """
         return self._make_request("GET", f"/api/hardware/status/{backend_name}/")
+    
+    def run(
+        self,
+        circuit: QuantumCircuit,
+        backend: str,
+        *,
+        shots: int = 1024,
+        mitigation_params: Optional[MitigationParams] = None,
+        name: Optional[str] = None,
+        polling_interval: int = 0.5,
+        timeout: int = 300,
+    ) -> Result:
+        """
+        Submit `circuit`, block until it finishes, and return a Qiskit `Result`.
+
+        Parameters
+        ----------
+        circuit
+            The QuantumCircuit to execute.
+        backend
+            Backend name recognised by the server.
+        shots
+            Number of shots for execution.
+        mitigation_params
+            Optional error-mitigation parameters.
+        name
+            Human-readable identifier stored on the server.
+        polling_interval
+            Seconds between status checks.
+        timeout
+            Abort waiting after this many seconds.
+
+        Returns
+        -------
+        qiskit.result.Result
+            Qiskit-compatible result object (counts in ``Result.get_counts()``).
+
+        Raises
+        ------
+        AuthenticationError
+            If the client is not logged in.
+        QuantumClientError | JobError
+            If submission fails or the job errors out.
+        TimeoutError
+            If the job is not finished within *timeout* seconds.
+        """
+        # 1. Submit
+        job = self.create_job(
+            circuit=circuit,
+            backend=backend,
+            shots=shots,
+            mitigation_params=mitigation_params,
+            name=name,
+        )
+
+        # 2. Wait
+        ok, res_or_err = self.wait_for_job(
+            job_id=job.id,
+            polling_interval=polling_interval,
+            timeout=timeout,
+        )
+        if not ok:
+            # `res_or_err` is an error dict from wait_for_job
+            msg = res_or_err.get("error", "Unknown job failure")
+            raise JobError(f"Job {job.id} failed: {msg}")
+
+        # 3. Convert service result → Qiskit Result
+        bh_res: BlackholeResult = res_or_err
+        result_dict = {
+            "backend_name": backend,
+            "backend_version": "0.0.1",          # update if your API exposes this
+            "qobj_id": None,
+            "job_id": str(job.id),
+            "success": True,
+            "results": [
+                {
+                    "shots": shots,
+                    "status": "DONE",
+                    "success": True,
+                    "header": {
+                        "name": name or f"SNUQ-run-{datetime.utcnow().isoformat()}",
+                        "memory_slots": circuit.num_clbits,
+                        "n_qubits": circuit.num_qubits,
+                    },
+                    "data": {
+                        # Expecting BlackholeResult.counts == {'00': 512, '11': 512, …}
+                        "counts": {k: v for k, v in bh_res.counts.items()},
+                    },
+                }
+            ],
+        }
+        return Result.from_dict(result_dict)
