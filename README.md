@@ -33,7 +33,7 @@ quantum‑computing services from pure Python.  With a single import you can
 pip install pyqcsnu
 ```
 
-Requires **Python 3.9+** and a network path to the SNU QC service.
+Requires **Python 3.9, Qiskit >= 2.0.0+** and a network path to the SNU QC service.
 
 ---
 
