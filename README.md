@@ -45,7 +45,8 @@ from pyqcsnu import SNUQ
 
 # 1  Connect & authenticate
 client = SNUQ()
-client.login("userid", "userpw")    # or via endowed TOKEN
+client.login("userid", "userpw")    
+# client.login_with_token("your_token")     # or via endowed TOKEN
 
 # 2  Build a circuit
 qc = QuantumCircuit(2, 2)
@@ -54,7 +55,7 @@ qc.cx(0, 1)
 qc.measure([0, 1], [0, 1])
 
 # 3  Run & get a Qiskit Result
-result = client.run(qc, backend="Cassiopeia", shots=2048)
+result = client.run(qc, backend="Cassiopeia", shots=2048)   # qiskit.result.Result instance
 print(result.get_counts())  # {'00': 1012, '11': 1036}
 ```
 
@@ -89,7 +90,7 @@ to JSON or build them via `.model_validate()`.
 ### Submit now, fetch later
 
 ```python
-job = client.create_job(qc, backend="ion_trap_5q", shots=5000)
+job = client.create_job(qc, backend="Cassiopeia", shots=5000)
 print(job.id, job.status)
 
 # ... do other work ...
@@ -116,7 +117,7 @@ if job.status != "completed":
 from pyqcsnu.exceptions import AuthenticationError, JobError
 
 try:
-    result = client.run(qc, backend="faulty_backend")   # qiskit.result.Result instance
+    result = client.run(qc, backend="faulty_backend")   
 except AuthenticationError:
     print("⚠️  Please log in first.")
 except JobError as e:
