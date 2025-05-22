@@ -8,8 +8,7 @@ from datetime import datetime
 import json
 from pydantic import BaseModel, Field
 from qiskit import QuantumCircuit
-from qiskit.circuit import Instruction, Parameter
-from qiskit.circuit.library import standard_gates
+
 
 '''
 class QCircuit(BaseModel):
@@ -190,33 +189,43 @@ class MitigationParams:
 
 @dataclass
 class SNUBackend:
-    """Represents a quantum computing backend."""
-    
+    """
+    Represents a quantum-hardware record returned by the “hardware” app in the backend server.
+
+    If you still need the older `status`, `n_qubits`, etc., keep them as
+    *optional* extras so existing code does not break.
+    """
+    # --- required by the API --------------------------------------------------
     name: str
-    status: str
-    n_qubits: int
-    capabilities: Dict[str, Any] = field(default_factory=dict)
+    graph_data: Dict[str, Any] = field(default_factory=dict)
+    pending_jobs: int = 0
+
+    # --- legacy / optional fields --------------------------------------------
+    status: str = None
+    n_qubits: int = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_dict(self) -> Dict:
-        """Convert backend to dictionary format."""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialise to a plain dict (round-trippable with `from_dict`)."""
         return {
             "name": self.name,
+            # "graph_data": self.graph_data,
+            "pending_jobs": self.pending_jobs,
             "status": self.status,
             "n_qubits": self.n_qubits,
-            "capabilities": self.capabilities,
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict) -> 'SNUBackend':
-        """Create a SNUBackend instance from a dictionary."""
+    def from_dict(cls, data: Dict[str, Any]) -> "SNUBackend":
+        """Construct from API payload."""
         return cls(
             name=data["name"],
-            status=data["status"],
-            n_qubits=data["n_qubits"],
-            capabilities=data.get("capabilities", {}),
-            metadata=data.get("metadata", {})
+            #graph_data=data.get("graph_data", {}),
+            pending_jobs=data.get("pending_jobs", 0),
+            status=data.get("status"),             # not in new payload → None
+            n_qubits=data.get("n_qubits"),         # not in new payload → None
+            metadata=data.get("metadata", {}),
         )
 
 @dataclass
@@ -225,7 +234,7 @@ class BlackholeJob:
     
     id: int
     status: str
-    circuit: QCircuit
+    circuit: QuantumCircuit
     backend: str
     shots: int
     created_at: datetime
@@ -239,7 +248,7 @@ class BlackholeJob:
         return {
             "id": self.id,
             "status": self.status,
-            "circuit": self.circuit.to_dict(),
+            "circuit_info": self.circuit.to_dict(),
             "backend": self.backend,
             "shots": self.shots,
             "created_at": self.created_at.isoformat(),
@@ -255,7 +264,7 @@ class BlackholeJob:
         return cls(
             id=data["id"],
             status=data["status"],
-            circuit=QCircuit.from_dict(data["circuit"]),
+            circuit=data["circuit_info"],
             backend=data["backend"],
             shots=data["shots"],
             created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
@@ -308,34 +317,44 @@ class BlackholeExperiment:
 @dataclass
 class BlackholeResult:
     """Represents the results of a quantum computing job."""
-    
     job_id: int
     counts: Dict[str, int]
     metadata: Dict[str, Any] = field(default_factory=dict)
-    processed_data: Optional[Dict[str, Any]] = None
+    processed_results: Optional[Dict[str, Any]] = None
     error_mitigation: Optional[Dict[str, Any]] = None
-    
-    def to_dict(self) -> Dict:
-        """Convert result to dictionary format."""
+
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "job_id": self.job_id,
             "counts": self.counts,
             "metadata": self.metadata,
-            "processed_data": self.processed_data,
-            "error_mitigation": self.error_mitigation
+            "processed_results": self.processed_results,
+            "error_mitigation": self.error_mitigation,
         }
-    
+
+    # ---------- FIXED ----------
     @classmethod
-    def from_dict(cls, data: Dict) -> 'BlackholeResult':
-        """Create a BlackholeResult instance from a dictionary."""
+    def from_dict(cls, data: Dict[str, Any]) -> "BlackholeResult":
+        """
+        Build a BlackholeResult from the API payload.
+
+        The server may supply:
+            • 'counts'               (preferred)
+            • 'processed_results' -> {'counts': {...}}
+            • 'job_id'  or 'id'
+        """
+        counts = data.get("counts")
+        if counts is None:
+            counts = data.get("processed_results", {}).get("counts", {})
+
         return cls(
-            job_id=data["job_id"],
-            counts=data["counts"],
+            job_id=data.get("job_id") or data.get("id"),
+            counts=counts,
             metadata=data.get("metadata", {}),
-            processed_data=data.get("processed_data"),
-            error_mitigation=data.get("error_mitigation")
+            processed_results=data.get("processed_results"),
+            error_mitigation=data.get("error_mitigation"),
         )
-    
+
     def get_expectation_value(self, observable: Dict[str, float]) -> float:
         """
         Calculate the expectation value for a given observable.
