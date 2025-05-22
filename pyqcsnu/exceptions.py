@@ -10,6 +10,10 @@ class AuthenticationError(QuantumClientError):
     """Raised when authentication fails or is missing."""
     pass
 
+class APIError(QuantumClientError):
+    """Raised when an API request fails."""
+    pass
+
 class JobError(QuantumClientError):
     """Raised when a job operation fails."""
     pass

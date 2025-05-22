@@ -19,13 +19,7 @@ pip install -e ".[dev]"
 ## Configuration
 
 The client can be configured in several ways:
-
-1. **Base URL Configuration**:
-   - Pass directly to client: `client = QuantumClient(base_url="https://api.example.com")`
-   - Set environment variable: `export PYQCSNU_BASE_URL="https://api.example.com"`
-   - Default: `http://localhost:8000`
-
-2. **Authentication**:
+**Authentication**:
    - Login with username/password: `client.login(username="user", password="pass")`
    - Login with token: `client.login_with_token(token="your-token")`
    - Set token during initialization: `client = QuantumClient(token="your-token")`

@@ -6,31 +6,165 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
 import json
+from pydantic import BaseModel, Field
+from qiskit import QuantumCircuit
+from qiskit.circuit import Instruction, Parameter
+from qiskit.circuit.library import standard_gates
 
-@dataclass
-class Circuit:
-    """Represents a quantum circuit."""
+'''
+class QCircuit(BaseModel):
+    """Model representing a quantum circuit."""
+    name: str = Field(..., description="Name of the circuit")
+    num_qubits: int = Field(..., description="Number of qubits in the circuit")
+    gates: List[Dict[str, Any]] = Field(default_factory=list, description="List of quantum gates")
+    parameters: Dict[str, float] = Field(default_factory=dict, description="Circuit parameters")
+    qasm: Optional[str] = Field(None, description="OpenQASM representation of the circuit")
     
-    qasm: str
-    name: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    @classmethod
+    def from_qasm(cls, qasm: str, name: Optional[str] = None) -> 'QCircuit':
+        """Create a QCircuit instance from OpenQASM string."""
+        lines = qasm.strip().split('\n')
+        num_qubits = 0
+        gates = []
+        for line in lines:
+            line = line.strip()
+            if line.startswith('qreg'):
+                num_qubits = int(line.split('[')[1].split(']')[0])
+            elif line and not line.startswith(('OPENQASM', 'include', '//', 'creg', 'measure')):
+                if ';' in line:
+                    gate_line = line.split(';')[0].strip()
+                    if gate_line:
+                        parts = gate_line.split()
+                        if len(parts) >= 2:
+                            gate_name = parts[0]
+                            qubits = [int(q.strip('q[]')) for q in parts[1].split(',') if q.strip()]
+                            gates.append({
+                                "name": gate_name,
+                                "qubits": qubits,
+                                "clbits": []
+                            })
+        return cls(
+            name=name or "qasm_circuit",
+            num_qubits=num_qubits,
+            gates=gates,
+            qasm=qasm
+        )
     
-    def to_dict(self) -> Dict:
+    @classmethod
+    def from_qiskit(cls, circuit: QuantumCircuit, name: Optional[str] = None) -> 'QCircuit':
+        """Create a QCircuit instance from a Qiskit QuantumCircuit."""
+        gates = []
+        parameters = {}
+        for instruction, qargs, cargs in circuit.data:
+            gate_dict = {
+                "name": instruction.name,
+                "qubits": [q._index for q in qargs],
+                "clbits": [c._index for c in cargs],
+            }
+            if instruction.params:
+                param_values = []
+                for param in instruction.params:
+                    if isinstance(param, Parameter):
+                        param_name = param.name
+                        if param_name not in parameters:
+                            parameters[param_name] = 0.0
+                        param_values.append({"name": param_name})
+                    else:
+                        param_values.append({"value": float(param)})
+                gate_dict["params"] = param_values
+            gates.append(gate_dict)
+        return cls(
+            name=name or circuit.name or "qiskit_circuit",
+            num_qubits=circuit.num_qubits,
+            gates=gates,
+            parameters=parameters,
+            qasm=None  # Do not use circuit.qasm()
+        )
+    
+    def to_qiskit(self) -> QuantumCircuit:
+        """Convert to a Qiskit QuantumCircuit.
+        
+        Returns:
+            QuantumCircuit instance
+        """
+        circuit = QuantumCircuit(self.num_qubits, name=self.name)
+        
+        # Map of gate names to Qiskit gate classes
+        gate_map = {
+            "h": standard_gates.HGate,
+            "x": standard_gates.XGate,
+            "y": standard_gates.YGate,
+            "z": standard_gates.ZGate,
+            "cx": standard_gates.CXGate,
+            "cz": standard_gates.CZGate,
+            "swap": standard_gates.SwapGate,
+            "rx": standard_gates.RXGate,
+            "ry": standard_gates.RYGate,
+            "rz": standard_gates.RZGate,
+            "u1": standard_gates.U1Gate,
+            "u2": standard_gates.U2Gate,
+            "u3": standard_gates.U3Gate,
+        }
+        
+        # Apply gates
+        for gate in self.gates:
+            gate_name = gate["name"].lower()
+            qubits = gate["qubits"]
+            
+            if gate_name in gate_map:
+                gate_class = gate_map[gate_name]
+                params = []
+                
+                # Handle parameters
+                if "params" in gate:
+                    for param in gate["params"]:
+                        if "name" in param:
+                            param_name = param["name"]
+                            if param_name in self.parameters:
+                                params.append(self.parameters[param_name])
+                            else:
+                                params.append(0.0)  # Default value
+                        elif "value" in param:
+                            params.append(param["value"])
+                
+                # Create and apply the gate
+                if params:
+                    gate_instance = gate_class(*params)
+                else:
+                    gate_instance = gate_class()
+                
+                circuit.append(gate_instance, qubits)
+            else:
+                raise ValueError(f"Unsupported gate: {gate_name}")
+        
+        return circuit
+    
+    def to_dict(self) -> Dict[str, Any]:
         """Convert circuit to dictionary format."""
         return {
-            "qasm": self.qasm,
             "name": self.name,
-            "metadata": self.metadata
+            "num_qubits": self.num_qubits,
+            "gates": self.gates,
+            "parameters": self.parameters,
+            "qasm": self.qasm
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Circuit':
-        """Create a Circuit instance from a dictionary."""
-        return cls(
-            qasm=data["qasm"],
-            name=data.get("name"),
-            metadata=data.get("metadata", {})
-        )
+    def from_dict(cls, data: Dict[str, Any]) -> 'QCircuit':
+        """Create circuit from dictionary format."""
+        return cls(**data)
+    
+    def to_json(self) -> str:
+        """Convert circuit to JSON string."""
+        return json.dumps(self.to_dict())
+    
+    @classmethod
+    def from_json(cls, json_str: str) -> 'QCircuit':
+        """Create circuit from JSON string."""
+        data = json.loads(json_str)
+        return cls.from_dict(data)
+'''
+
 
 @dataclass
 class MitigationParams:
@@ -55,7 +189,7 @@ class MitigationParams:
         )
 
 @dataclass
-class Backend:
+class SNUBackend:
     """Represents a quantum computing backend."""
     
     name: str
@@ -75,8 +209,8 @@ class Backend:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Backend':
-        """Create a Backend instance from a dictionary."""
+    def from_dict(cls, data: Dict) -> 'SNUBackend':
+        """Create a SNUBackend instance from a dictionary."""
         return cls(
             name=data["name"],
             status=data["status"],
@@ -86,12 +220,12 @@ class Backend:
         )
 
 @dataclass
-class Job:
+class BlackholeJob:
     """Represents a quantum computing job."""
     
     id: int
     status: str
-    circuit: Circuit
+    circuit: QCircuit
     backend: str
     shots: int
     created_at: datetime
@@ -116,23 +250,23 @@ class Job:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Job':
-        """Create a Job instance from a dictionary."""
+    def from_dict(cls, data: Dict) -> 'BlackholeJob':
+        """Create a BlackholeJob instance from a dictionary."""
         return cls(
             id=data["id"],
             status=data["status"],
-            circuit=Circuit.from_dict(data["circuit"]),
+            circuit=QCircuit.from_dict(data["circuit"]),
             backend=data["backend"],
             shots=data["shots"],
-            created_at=datetime.fromisoformat(data["created_at"]),
-            updated_at=datetime.fromisoformat(data["updated_at"]),
+            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
+            updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
             error_message=data.get("error_message"),
             mitigation_params=MitigationParams.from_dict(data["mitigation_params"]) if data.get("mitigation_params") else None,
             metadata=data.get("metadata", {})
         )
 
 @dataclass
-class Experiment:
+class BlackholeExperiment:
     """Represents a quantum experiment run."""
     
     id: int
@@ -158,21 +292,21 @@ class Experiment:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Experiment':
-        """Create an Experiment instance from a dictionary."""
+    def from_dict(cls, data: Dict) -> 'BlackholeExperiment':
+        """Create a BlackholeExperiment instance from a dictionary."""
         return cls(
             id=data["id"],
             status=data["status"],
             pulse_schedule=data["pulse_schedule"],
             external_run_id=data["external_run_id"],
-            created_at=datetime.fromisoformat(data["created_at"]),
-            updated_at=datetime.fromisoformat(data["updated_at"]),
+            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
+            updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
             error_message=data.get("error_message"),
             metadata=data.get("metadata", {})
         )
 
 @dataclass
-class Result:
+class BlackholeResult:
     """Represents the results of a quantum computing job."""
     
     job_id: int
@@ -192,8 +326,8 @@ class Result:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Result':
-        """Create a Result instance from a dictionary."""
+    def from_dict(cls, data: Dict) -> 'BlackholeResult':
+        """Create a BlackholeResult instance from a dictionary."""
         return cls(
             job_id=data["job_id"],
             counts=data["counts"],

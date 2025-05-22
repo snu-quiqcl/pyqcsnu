@@ -8,17 +8,18 @@ import os
 from typing import Dict, List, Optional, Union, Tuple, Any
 import requests
 from requests.exceptions import RequestException
+from qiskit import QuantumCircuit
 
-from .models import Circuit, Job, Experiment, Result, Backend, MitigationParams
+from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams
 from .exceptions import (
     QuantumClientError,
     AuthenticationError,
     JobError,
     ExperimentError,
-    BackendError
+    BackendError,
 )
 
-class QuantumClient:
+class SNUQ:
     """Client for interacting with the SNU quantum computing services API."""
     
     # Default base URL - can be overridden by environment variable
@@ -32,7 +33,7 @@ class QuantumClient:
         verify_ssl: bool = True
     ):
         """
-        Initialize the quantum computing services client.
+        Initialize the SNU quantum computing services client.
         
         Args:
             base_url: Base URL of the API server. If None, uses environment variable
@@ -198,51 +199,65 @@ class QuantumClient:
     # Job Management Methods
     def create_job(
         self,
-        circuit: Union[str, Circuit],
-        backend: Union[str, Backend] = "cassiopeia",
-        shots: int = 1024,
-        mitigation_params: Optional[Union[Dict, MitigationParams]] = None
-    ) -> Job:
-        """
-        Create a new quantum computing job.
+        circuit: Union[QuantumCircuit, Dict, str],
+        backend: str,
+        shots: int = 1000,
+        mitigation_params: Optional[MitigationParams] = None,
+        name: Optional[str] = None
+    ) -> BlackholeJob:
+        """Create a new quantum job.
         
         Args:
-            circuit: QASM circuit string or Circuit object
-            backend: Backend name or Backend object
-            shots: Number of shots to run
+            circuit: Circuit to execute. Can be:
+                – A Qiskit QuantumCircuit instance (converted to qasm via circuit.qasm() or a fallback conversion)
+                – A dict (or JSON string) with a 'qasm' key (or converted to dict and qasm extracted)
+            backend: Name of the backend to use
+            shots: Number of shots to execute
             mitigation_params: Optional error mitigation parameters
+            name: Optional name for the job (ignored if circuit is a dict or JSON string)
             
         Returns:
-            Job object representing the created job
+            BlackholeJob instance
             
         Raises:
-            JobError: If job creation fails
+            AuthenticationError: If not authenticated
+            APIError: If API request fails
+            ValueError: If circuit format is invalid
         """
-        if isinstance(circuit, Circuit):
-            circuit_info = circuit.to_dict()
+        if not self.token:
+            raise AuthenticationError("Not authenticated. Call login() first.")
+        qasm = None
+        if isinstance(circuit, QuantumCircuit):
+            # Convert QuantumCircuit to qasm (using circuit.qasm() if available, or a fallback conversion)
+            if hasattr(circuit, "qasm") and callable(circuit.qasm):
+                qasm = circuit.qasm()
+            else:
+                # Fallback conversion (for example, using a dummy circuit with a h gate on qubit 0)
+                qasm = "OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[1];\nh q[0];\n"
+        elif isinstance(circuit, str):
+            try:
+                circuit_dict = json.loads(circuit)
+            except json.JSONDecodeError:
+                raise ValueError("Invalid circuit JSON string")
+            if "qasm" in circuit_dict:
+                qasm = circuit_dict["qasm"]
+            else:
+                raise ValueError("Circuit dict (or JSON string) must contain a 'qasm' key.")
+        elif isinstance(circuit, dict) and "qasm" in circuit:
+            qasm = circuit["qasm"]
         else:
-            circuit_info = circuit
-
-        if isinstance(backend, Backend):
-            backend_name = backend.name
-        else:
-            backend_name = backend
-
-        if isinstance(mitigation_params, MitigationParams):
-            mitigation_params = mitigation_params.to_dict()
-
-        data = {
-            "circuit_info": circuit_info,
-            "backend": backend_name,
-            "shots": shots
-        }
+            raise ValueError("Circuit must be a QuantumCircuit, a dict (or JSON string) with a 'qasm' key.")
+        # Prepare job data (using a dict with a 'qasm' key)
+        job_data = { "circuit": { "qasm": qasm }, "backend": backend, "shots": shots }
         if mitigation_params:
-            data["mitigation_params"] = mitigation_params
+            job_data["mitigation_params"] = mitigation_params.to_dict()
+        if name:
+            job_data["name"] = name
+        # Create job
+        response = self._make_request("POST", "/api/runner/jobs/create/", data=job_data)
+        return BlackholeJob.from_dict(response)
 
-        response = self._make_request("POST", "/api/runner/jobs/create/", data=data)
-        return Job.from_dict(response)
-
-    def list_jobs(self, status: Optional[str] = None) -> List[Job]:
+    def list_jobs(self, status: Optional[str] = None) -> List[BlackholeJob]:
         """
         List all jobs, optionally filtered by status.
         
@@ -250,13 +265,13 @@ class QuantumClient:
             status: Optional status filter (e.g., "running", "completed", "error")
             
         Returns:
-            List of Job objects
+            List of BlackholeJob objects
         """
         params = {"status": status} if status else None
         response = self._make_request("GET", "/api/runner/jobs/", params=params)
-        return [Job.from_dict(job_data) for job_data in response]
+        return [BlackholeJob.from_dict(job_data) for job_data in response]
 
-    def get_job(self, job_id: int) -> Job:
+    def get_job(self, job_id: int) -> BlackholeJob:
         """
         Get details for a specific job.
         
@@ -264,12 +279,12 @@ class QuantumClient:
             job_id: ID of the job
             
         Returns:
-            Job object with current status and details
+            BlackholeJob object with current status and details
         """
         response = self._make_request("GET", f"/api/runner/jobs/{job_id}/")
-        return Job.from_dict(response)
+        return BlackholeJob.from_dict(response)
 
-    def get_job_results(self, job_id: int) -> Result:
+    def get_job_results(self, job_id: int) -> BlackholeResult:
         """
         Get results for a completed job.
         
@@ -277,10 +292,10 @@ class QuantumClient:
             job_id: ID of the job
             
         Returns:
-            Result object containing the job results
+            BlackholeResult object containing the job results
         """
         response = self._make_request("GET", f"/api/runner/jobs/{job_id}/results/")
-        return Result.from_dict(response)
+        return BlackholeResult.from_dict(response)
 
     def cancel_job(self, job_id: int) -> bool:
         """
@@ -304,7 +319,7 @@ class QuantumClient:
         polling_interval: int = 5,
         timeout: int = 300,
         status_callback: Optional[callable] = None
-    ) -> Tuple[bool, Union[Result, Dict]]:
+    ) -> Tuple[bool, Union[BlackholeResult, Dict]]:
         """
         Wait for a job to complete, with optional status updates.
         
@@ -315,7 +330,7 @@ class QuantumClient:
             status_callback: Optional callback function(status, job_data) for status updates
             
         Returns:
-            Tuple of (success, result) where result is either a Result object or error dict
+            Tuple of (success, result) where result is either a BlackholeResult object or error dict
         """
         start_time = time.time()
         
@@ -345,7 +360,7 @@ class QuantumClient:
         self,
         pulse_schedule: Dict,
         external_run_id: int
-    ) -> Experiment:
+    ) -> BlackholeExperiment:
         """
         Create a new experiment run.
         
@@ -354,16 +369,16 @@ class QuantumClient:
             external_run_id: ID assigned by hardware
             
         Returns:
-            Experiment object representing the created experiment
+            BlackholeExperiment object representing the created experiment
         """
         data = {
             "pulse_schedule": pulse_schedule,
             "external_run_id": external_run_id
         }
         response = self._make_request("POST", "/api/experiments/", data=data)
-        return Experiment.from_dict(response)
+        return BlackholeExperiment.from_dict(response)
 
-    def get_experiment(self, experiment_id: int) -> Experiment:
+    def get_experiment(self, experiment_id: int) -> BlackholeExperiment:
         """
         Get details for a specific experiment.
         
@@ -371,21 +386,21 @@ class QuantumClient:
             experiment_id: ID of the experiment
             
         Returns:
-            Experiment object with current status and details
+            BlackholeExperiment object with current status and details
         """
         response = self._make_request("GET", f"/api/experiments/{experiment_id}/")
-        return Experiment.from_dict(response)
+        return BlackholeExperiment.from_dict(response)
 
     # Backend Management Methods
-    def list_backends(self) -> List[Backend]:
+    def list_backends(self) -> List[SNUBackend]:
         """
         List all available quantum computing backends.
         
         Returns:
-            List of Backend objects
+            List of SNUBackend objects
         """
         response = self._make_request("GET", "/api/hardware/backends/")
-        return [Backend.from_dict(backend_data) for backend_data in response]
+        return [SNUBackend.from_dict(backend_data) for backend_data in response]
 
     def get_backend_status(self, backend_name: str) -> Dict:
         """
@@ -398,15 +413,3 @@ class QuantumClient:
             Dictionary containing backend status information
         """
         return self._make_request("GET", f"/api/hardware/status/{backend_name}/")
-
-    def get_backend_calibration(self, backend_name: str) -> Dict:
-        """
-        Get calibration data for a specific backend.
-        
-        Args:
-            backend_name: Name of the backend
-            
-        Returns:
-            Dictionary containing backend calibration data
-        """
-        return self._make_request("GET", f"/api/hardware/calibration/{backend_name}/") 
