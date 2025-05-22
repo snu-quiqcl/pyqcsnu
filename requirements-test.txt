@@ -1,0 +1,25 @@
+# Testing frameworks
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-asyncio>=0.21.0  # For testing async functionality
+pytest-mock>=3.10.0  # For mocking in tests
+pytest-timeout>=2.1.0  # For timeout handling in tests
+
+# HTTP mocking
+responses>=0.23.0
+requests-mock>=1.11.0  # Alternative HTTP mocking library
+
+# Code quality and type checking
+black>=23.0.0
+isort>=5.12.0
+flake8>=6.0.0
+flake8-docstrings>=1.7.0  # For docstring checking
+flake8-bugbear>=23.3.0  # For additional linting rules
+mypy>=1.0.0
+types-requests>=2.28.0
+types-python-dateutil>=2.8.19.14  # Type stubs for dateutil
+
+# Development tools
+pre-commit>=3.3.0  # For git hooks
+coverage>=7.2.7  # For code coverage reporting
+safety>=2.3.0  # For security vulnerability checking 
