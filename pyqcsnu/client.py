@@ -555,25 +555,23 @@ class SNUQ:
         """
 
         if isinstance(operators, Pauli):
-            return {
-                "paulis": [operators.to_label()],
-                "coeffs": [1.0]
-            }
+            return Hamiltonian.from_dict({
+                "operators": [operators.to_label()],
+                "coefficients": [1.0]
+            })
 
-        # If it’s an Opflow PauliSumOp, extract its primitive
+        # If it’s an Opflow PauliSumOp, extract its primitive -> SparsePauliOp
         if isinstance(operators, PauliSumOp):
-            # .primitive is a SparsePauliOp under the hood
             operators = operators.primitive
 
-        # At this point we expect a SparsePauliOp
         if isinstance(operators, SparsePauliOp):
             # .to_list() → List[Tuple[Pauli, complex]]
             terms = operators.to_list()
 
             labels = [p.to_label() for p, _c in terms]
-            coeffs = [float(c.real) for _p, c in terms]  # drop any tiny imag parts
+            coeffs = [float(c.real) for _p, c in terms]
 
-            return {"paulis": labels, "coeffs": coeffs}
+            return Hamiltonian.from_dict({"operators": labels, "coefficients": coeffs})
         
         job = self.create_job(
             circuit=circuit,
