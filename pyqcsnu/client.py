@@ -9,10 +9,11 @@ from typing import Dict, List, Optional, Union, Tuple, Any
 import requests
 from requests.exceptions import RequestException
 from qiskit import QuantumCircuit
-from datetime import datetime
+from datetime import datetime, timezone
 from qiskit.result import Result
+from qiskit.quantum_info import Pauli, SparsePauliOp, PauliSumOp
 
-from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams
+from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams, Hamiltonian
 from .exceptions import (
     QuantumClientError,
     AuthenticationError,
@@ -202,6 +203,7 @@ class SNUQ:
         backend: str,
         shots: int = 1024,
         mitigation_params: Optional[MitigationParams] = None,
+        hamiltonian: Optional[Hamiltonian] = None,
         name: Optional[str] = None
     ) -> BlackholeJob:
         """Create a new quantum job.
@@ -252,6 +254,10 @@ class SNUQ:
             job_data["mitigation_params"] = mitigation_params.to_dict()
         if name:
             job_data["name"] = name
+        if hamiltonian:
+            job_data["hamiltonian"] = hamiltonian.to_dict()
+            job_data["experiment_type"] = "EXPVAL"
+        
         # Create job
         response = self._make_request("POST", "/api/runner/jobs/create/", data=job_data)
         return BlackholeJob.from_dict(response)
@@ -496,7 +502,7 @@ class SNUQ:
                     "status": "DONE",
                     "success": True,
                     "header": {
-                        "name": name or f"SNUQ-run-{datetime.utcnow().isoformat()}",
+                        "name": name or f"SNUQ-run-{datetime.now(timezone.utc).isoformat()}",
                         "memory_slots": circuit.num_clbits,
                         "n_qubits": circuit.num_qubits,
                     },
@@ -508,3 +514,84 @@ class SNUQ:
             ],
         }
         return Result.from_dict(result_dict)
+    
+    def expval(self,
+        circuit: QuantumCircuit,
+        operators: Union[Pauli, SparsePauliOp, PauliSumOp],
+        backend: str,
+        *,
+        shots: int = 1024,
+        mitigation_params: Optional[MitigationParams] = None,
+        name: Optional[str] = None,
+        polling_interval: int = 0.5,
+        timeout: int = 300,
+    ) -> float:
+        """
+        Submit `circuit` and `hamiltonian`, block until it finishes, and return a Qiskit `Result`.
+
+        Parameters
+        ----------
+        circuit
+            The QuantumCircuit to execute.
+        hamiltonian
+            The Hamiltonian to evaluate.
+        backend
+            Backend name recognised by the server.
+        shots
+            Number of shots for execution.
+        mitigation_params
+            Optional error-mitigation parameters.
+        name
+            Human-readable identifier stored on the server.
+        polling_interval
+            Seconds between status checks.
+        timeout
+            Abort waiting after this many seconds.
+
+        Returns
+        -------
+        float
+            The expectation value of the Hamiltonian.
+        """
+
+        if isinstance(operators, Pauli):
+            return {
+                "paulis": [operators.to_label()],
+                "coeffs": [1.0]
+            }
+
+        # If it’s an Opflow PauliSumOp, extract its primitive
+        if isinstance(operators, PauliSumOp):
+            # .primitive is a SparsePauliOp under the hood
+            operators = operators.primitive
+
+        # At this point we expect a SparsePauliOp
+        if isinstance(operators, SparsePauliOp):
+            # .to_list() → List[Tuple[Pauli, complex]]
+            terms = operators.to_list()
+
+            labels = [p.to_label() for p, _c in terms]
+            coeffs = [float(c.real) for _p, c in terms]  # drop any tiny imag parts
+
+            return {"paulis": labels, "coeffs": coeffs}
+        
+        job = self.create_job(
+            circuit=circuit,
+            backend=backend,
+            hamiltonian=operators,
+            shots=shots,
+            mitigation_params=mitigation_params,
+            name=name,
+        )
+
+        ok, res_or_err = self.wait_for_job(
+            job_id=job.id,
+            polling_interval=polling_interval,
+            timeout=timeout,
+        )
+        if not ok:
+            # `res_or_err` is an error dict from wait_for_job
+            msg = res_or_err.get("error", "Unknown job failure")
+            raise JobError(f"Job {job.id} failed: {msg}")
+        
+        return res_or_err.processed_results

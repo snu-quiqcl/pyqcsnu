@@ -164,7 +164,7 @@ class QCircuit(BaseModel):
         return cls.from_dict(data)
 '''
 
-
+# Abstract dataclass for parameters for error mitigation
 @dataclass
 class MitigationParams:
     """Parameters for error mitigation techniques."""
@@ -185,6 +185,44 @@ class MitigationParams:
         return cls(
             technique=data["technique"],
             params=data.get("params", {})
+        )
+    
+
+# Abstract dataclass for the Hamiltonian for expectation value evaluations
+@dataclass
+class Hamiltonian:
+    operators: List[str]
+    coefficients: List[float]
+    num_qubits: Optional[int] = None
+
+    def __post_init__(self):
+        if len(self.operators) != len(self.coefficients):
+            raise ValueError(
+                f"Expected same length for operators ({len(self.operators)}) "
+                f"and coefficients ({len(self.coefficients)})."
+            )
+        if self.num_qubits is None:
+            self.num_qubits = len(self.operators[0])
+        for op in self.operators:
+            if not isinstance(op, str) or not op:
+                raise ValueError(f"Invalid operator: {op!r}")
+
+    def to_dict(self) -> Dict:
+        return {
+            "num_qubits": self.num_qubits,
+            "operators": self.operators,
+            "coefficients": self.coefficients,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Hamiltonian":
+        if "num_qubits" not in data:
+            data["num_qubits"] = len(data["operators"][0])
+
+        return cls(
+            num_qubits=data["num_qubits"],
+            operators=data["operators"],
+            coefficients=data["coefficients"],
         )
 
 @dataclass
