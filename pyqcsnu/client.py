@@ -11,7 +11,8 @@ from requests.exceptions import RequestException
 from qiskit import QuantumCircuit
 from datetime import datetime, timezone
 from qiskit.result import Result
-from qiskit.quantum_info import Pauli, SparsePauliOp, PauliSumOp
+from qiskit.quantum_info import Pauli, SparsePauliOp
+import numpy as np
 
 from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams, Hamiltonian
 from .exceptions import (
@@ -517,7 +518,7 @@ class SNUQ:
     
     def expval(self,
         circuit: QuantumCircuit,
-        operators: Union[Pauli, SparsePauliOp, PauliSumOp],
+        operators: Union[Pauli, SparsePauliOp],
         backend: str,
         *,
         shots: int = 1024,
@@ -555,23 +556,16 @@ class SNUQ:
         """
 
         if isinstance(operators, Pauli):
-            return Hamiltonian.from_dict({
+            operators = Hamiltonian.from_dict({
                 "operators": [operators.to_label()],
                 "coefficients": [1.0]
             })
 
-        # If it’s an Opflow PauliSumOp, extract its primitive -> SparsePauliOp
-        if isinstance(operators, PauliSumOp):
-            operators = operators.primitive
-
         if isinstance(operators, SparsePauliOp):
-            # .to_list() → List[Tuple[Pauli, complex]]
-            terms = operators.to_list()
-
-            labels = [p.to_label() for p, _c in terms]
-            coeffs = [float(c.real) for _p, c in terms]
-
-            return Hamiltonian.from_dict({"operators": labels, "coefficients": coeffs})
+            
+            labels = [p.to_label() for p in operators.paulis]
+            coeffs = [float(c.real) for c in operators.coeffs]
+            operators = Hamiltonian.from_dict({"operators": labels, "coefficients": coeffs})
         
         job = self.create_job(
             circuit=circuit,
