@@ -356,7 +356,6 @@ class BlackholeExperiment:
 class BlackholeResult:
     """Represents the results of a quantum computing job."""
     job_id: int
-    counts: Dict[str, int]
     metadata: Dict[str, Any] = field(default_factory=dict)
     processed_results: Optional[Dict[str, Any]] = None
     error_mitigation: Optional[Dict[str, Any]] = None
@@ -364,7 +363,6 @@ class BlackholeResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "job_id": self.job_id,
-            "counts": self.counts,
             "metadata": self.metadata,
             "processed_results": self.processed_results,
             "error_mitigation": self.error_mitigation,
@@ -377,17 +375,13 @@ class BlackholeResult:
         Build a BlackholeResult from the API payload.
 
         The server may supply:
-            • 'counts'               (preferred)
-            • 'processed_results' -> {'counts': {...}}
+            • 'processed_results' -> {'counts': {...} or 'expval': ...}
+            • The processed results will be either 'counts' or 'expval' depending on the job type
             • 'job_id'  or 'id'
         """
-        counts = data.get("counts")
-        if counts is None:
-            counts = data.get("processed_results", {}).get("counts", {})
-
+        
         return cls(
             job_id=data.get("job_id") or data.get("id"),
-            counts=counts,
             metadata=data.get("metadata", {}),
             processed_results=data.get("processed_results"),
             error_mitigation=data.get("error_mitigation"),

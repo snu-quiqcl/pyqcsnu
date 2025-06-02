@@ -12,6 +12,7 @@ from qiskit import QuantumCircuit
 from datetime import datetime, timezone
 from qiskit.result import Result
 from qiskit.quantum_info import Pauli, SparsePauliOp
+from qiskit.qasm2 import dumps
 import numpy as np
 
 from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams, Hamiltonian
@@ -230,12 +231,10 @@ class SNUQ:
             raise AuthenticationError("Not authenticated. Call login() first.")
         qasm = None
         if isinstance(circuit, QuantumCircuit):
-            # Convert QuantumCircuit to qasm (using circuit.qasm() if available, or a fallback conversion)
-            if hasattr(circuit, "qasm") and callable(circuit.qasm):
-                qasm = circuit.qasm()
-            else:
-                # Fallback conversion (for example, using a dummy circuit with a h gate on qubit 0)
-                qasm = "OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[1];\nh q[0];\n"
+            try:
+                qasm = dumps(circuit)
+            except Exception as e:
+                raise ValueError(f"Failed to convert QuantumCircuit to qasm: {e}")
         elif isinstance(circuit, str):
             try:
                 circuit_dict = json.loads(circuit)
@@ -508,8 +507,8 @@ class SNUQ:
                         "n_qubits": circuit.num_qubits,
                     },
                     "data": {
-                        # Expecting BlackholeResult.counts == {'00': 512, '11': 512, …}
-                        "counts": {k: v for k, v in bh_res.counts.items()},
+                        # Expecting BlackholeResult.processed_results["counts"] == {'00': 512, '11': 512, …}
+                        "counts": {k: v for k, v in bh_res.processed_results["counts"].items()},
                     },
                 }
             ],
@@ -586,4 +585,4 @@ class SNUQ:
             msg = res_or_err.get("error", "Unknown job failure")
             raise JobError(f"Job {job.id} failed: {msg}")
         
-        return res_or_err.processed_results
+        return res_or_err.processed_results["expval"]
