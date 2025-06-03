@@ -554,23 +554,24 @@ class SNUQ:
             The expectation value of the Hamiltonian.
         """
 
-        NUM_QUBITS = 5        # keep this in one place
+        num_qubits = circuit.num_qubits
 
         if isinstance(operators, Pauli):
             label = operators.to_label()
-            if len(label) < NUM_QUBITS:
-                label = label.rjust(NUM_QUBITS, "I")      # <── changed
+            if len(label) < num_qubits:
+                raise ValueError("The length of the operators must match the length of the circuit.")
             operators = Hamiltonian.from_dict({
                 "operators": [label],
                 "coefficients": [1.0]
             })
 
         elif isinstance(operators, SparsePauliOp):
-            labels = [
-                p.to_label().rjust(NUM_QUBITS, "I") if len(p.to_label()) < NUM_QUBITS
-                else p.to_label()
-                for p in operators.paulis
-            ]
+            labels = []
+            for p in operators.paulis:
+                if len(p.to_label()) < num_qubits:
+                    raise ValueError("The length of the operators must match the length of the circuit.")
+                else: labels.append(p.to_label())
+            
             coeffs = [float(c.real) for c in operators.coeffs]
             operators = Hamiltonian.from_dict({
                 "operators": labels,
