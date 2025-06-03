@@ -9,10 +9,13 @@ from typing import Dict, List, Optional, Union, Tuple, Any
 import requests
 from requests.exceptions import RequestException
 from qiskit import QuantumCircuit
-from datetime import datetime
+from datetime import datetime, timezone
 from qiskit.result import Result
+from qiskit.quantum_info import Pauli, SparsePauliOp
+from qiskit.qasm2 import dumps
+import numpy as np
 
-from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams
+from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams, Hamiltonian
 from .exceptions import (
     QuantumClientError,
     AuthenticationError,
@@ -202,6 +205,7 @@ class SNUQ:
         backend: str,
         shots: int = 1024,
         mitigation_params: Optional[MitigationParams] = None,
+        hamiltonian: Optional[Hamiltonian] = None,
         name: Optional[str] = None
     ) -> BlackholeJob:
         """Create a new quantum job.
@@ -227,12 +231,10 @@ class SNUQ:
             raise AuthenticationError("Not authenticated. Call login() first.")
         qasm = None
         if isinstance(circuit, QuantumCircuit):
-            # Convert QuantumCircuit to qasm (using circuit.qasm() if available, or a fallback conversion)
-            if hasattr(circuit, "qasm") and callable(circuit.qasm):
-                qasm = circuit.qasm()
-            else:
-                # Fallback conversion (for example, using a dummy circuit with a h gate on qubit 0)
-                qasm = "OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[1];\nh q[0];\n"
+            try:
+                qasm = dumps(circuit)
+            except Exception as e:
+                raise ValueError(f"Failed to convert QuantumCircuit to qasm: {e}")
         elif isinstance(circuit, str):
             try:
                 circuit_dict = json.loads(circuit)
@@ -252,6 +254,10 @@ class SNUQ:
             job_data["mitigation_params"] = mitigation_params.to_dict()
         if name:
             job_data["name"] = name
+        if hamiltonian:
+            job_data["hamiltonian"] = hamiltonian.to_dict()
+            job_data["experiment_type"] = "EXPVAL"
+        
         # Create job
         response = self._make_request("POST", "/api/runner/jobs/create/", data=job_data)
         return BlackholeJob.from_dict(response)
@@ -496,15 +502,99 @@ class SNUQ:
                     "status": "DONE",
                     "success": True,
                     "header": {
-                        "name": name or f"SNUQ-run-{datetime.utcnow().isoformat()}",
+                        "name": name or f"SNUQ-run-{datetime.now(timezone.utc).isoformat()}",
                         "memory_slots": circuit.num_clbits,
                         "n_qubits": circuit.num_qubits,
                     },
                     "data": {
-                        # Expecting BlackholeResult.counts == {'00': 512, '11': 512, …}
-                        "counts": {k: v for k, v in bh_res.counts.items()},
+                        # Expecting BlackholeResult.processed_results["counts"] == {'00': 512, '11': 512, …}
+                        "counts": {k: v for k, v in bh_res.processed_results["counts"].items()},
                     },
                 }
             ],
         }
         return Result.from_dict(result_dict)
+    
+    def expval(self,
+        circuit: QuantumCircuit,
+        operators: Union[Pauli, SparsePauliOp],
+        backend: str,
+        *,
+        shots: int = 1024,
+        mitigation_params: Optional[MitigationParams] = None,
+        name: Optional[str] = None,
+        polling_interval: int = 0.5,
+        timeout: int = 300,
+    ) -> float:
+        """
+        Submit `circuit` and `hamiltonian`, block until it finishes, and return a Qiskit `Result`.
+
+        Parameters
+        ----------
+        circuit
+            The QuantumCircuit to execute.
+        hamiltonian
+            The Hamiltonian to evaluate.
+        backend
+            Backend name recognised by the server.
+        shots
+            Number of shots for execution.
+        mitigation_params
+            Optional error-mitigation parameters.
+        name
+            Human-readable identifier stored on the server.
+        polling_interval
+            Seconds between status checks.
+        timeout
+            Abort waiting after this many seconds.
+
+        Returns
+        -------
+        float
+            The expectation value of the Hamiltonian.
+        """
+
+        num_qubits = circuit.num_qubits
+
+        if isinstance(operators, Pauli):
+            label = operators.to_label()
+            if len(label) < num_qubits:
+                raise ValueError("The length of the operators must match the length of the circuit.")
+            operators = Hamiltonian.from_dict({
+                "operators": [label],
+                "coefficients": [1.0]
+            })
+
+        elif isinstance(operators, SparsePauliOp):
+            labels = []
+            for p in operators.paulis:
+                if len(p.to_label()) < num_qubits:
+                    raise ValueError("The length of the operators must match the length of the circuit.")
+                else: labels.append(p.to_label())
+            
+            coeffs = [float(c.real) for c in operators.coeffs]
+            operators = Hamiltonian.from_dict({
+                "operators": labels,
+                "coefficients": coeffs
+            })
+        
+        job = self.create_job(
+            circuit=circuit,
+            backend=backend,
+            hamiltonian=operators,
+            shots=shots,
+            mitigation_params=mitigation_params,
+            name=name,
+        )
+
+        ok, res_or_err = self.wait_for_job(
+            job_id=job.id,
+            polling_interval=polling_interval,
+            timeout=timeout,
+        )
+        if not ok:
+            # `res_or_err` is an error dict from wait_for_job
+            msg = res_or_err.get("error", "Unknown job failure")
+            raise JobError(f"Job {job.id} failed: {msg}")
+        
+        return res_or_err.processed_results["expval"]

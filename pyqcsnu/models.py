@@ -164,7 +164,7 @@ class QCircuit(BaseModel):
         return cls.from_dict(data)
 '''
 
-
+# Abstract dataclass for parameters for error mitigation
 @dataclass
 class MitigationParams:
     """Parameters for error mitigation techniques."""
@@ -185,6 +185,44 @@ class MitigationParams:
         return cls(
             technique=data["technique"],
             params=data.get("params", {})
+        )
+    
+
+# Abstract dataclass for the Hamiltonian for expectation value evaluations
+@dataclass
+class Hamiltonian:
+    operators: List[str]
+    coefficients: List[float]
+    num_qubits: Optional[int] = None
+
+    def __post_init__(self):
+        if len(self.operators) != len(self.coefficients):
+            raise ValueError(
+                f"Expected same length for operators ({len(self.operators)}) "
+                f"and coefficients ({len(self.coefficients)})."
+            )
+        if self.num_qubits is None:
+            self.num_qubits = len(self.operators[0])
+        for op in self.operators:
+            if not isinstance(op, str) or not op:
+                raise ValueError(f"Invalid operator: {op!r}")
+
+    def to_dict(self) -> Dict:
+        return {
+            "num_qubits": self.num_qubits,
+            "operators": self.operators,
+            "coefficients": self.coefficients,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Hamiltonian":
+        if "num_qubits" not in data:
+            data["num_qubits"] = len(data["operators"][0])
+
+        return cls(
+            num_qubits=data["num_qubits"],
+            operators=data["operators"],
+            coefficients=data["coefficients"],
         )
 
 @dataclass
@@ -318,7 +356,6 @@ class BlackholeExperiment:
 class BlackholeResult:
     """Represents the results of a quantum computing job."""
     job_id: int
-    counts: Dict[str, int]
     metadata: Dict[str, Any] = field(default_factory=dict)
     processed_results: Optional[Dict[str, Any]] = None
     error_mitigation: Optional[Dict[str, Any]] = None
@@ -326,7 +363,6 @@ class BlackholeResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "job_id": self.job_id,
-            "counts": self.counts,
             "metadata": self.metadata,
             "processed_results": self.processed_results,
             "error_mitigation": self.error_mitigation,
@@ -339,17 +375,13 @@ class BlackholeResult:
         Build a BlackholeResult from the API payload.
 
         The server may supply:
-            • 'counts'               (preferred)
-            • 'processed_results' -> {'counts': {...}}
+            • 'processed_results' -> {'counts': {...} or 'expval': ...}
+            • The processed results will be either 'counts' or 'expval' depending on the job type
             • 'job_id'  or 'id'
         """
-        counts = data.get("counts")
-        if counts is None:
-            counts = data.get("processed_results", {}).get("counts", {})
-
+        
         return cls(
             job_id=data.get("job_id") or data.get("id"),
-            counts=counts,
             metadata=data.get("metadata", {}),
             processed_results=data.get("processed_results"),
             error_mitigation=data.get("error_mitigation"),
