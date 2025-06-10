@@ -32,6 +32,7 @@ class SNUQ:
     
     def __init__(
         self,
+        base_url: Optional[str] = None,
         token: Optional[str] = None,
         timeout: int = 30,
         verify_ssl: bool = True
@@ -46,8 +47,8 @@ class SNUQ:
             timeout: Default timeout for requests in seconds
             verify_ssl: Whether to verify SSL certificates
         """
-        # Get base URL from environment variable if not provided
-        self.base_url = self.BASE_URL
+        # Get base URL from parameter, environment variable, or default
+        self.base_url = base_url or os.getenv('PYQCSNU_BASE_URL') or self.BASE_URL
         
         self.token = token
         self.timeout = timeout
@@ -62,6 +63,42 @@ class SNUQ:
         # Set token if provided
         if token:
             self.set_token(token)
+
+    @classmethod
+    def from_web_token(
+        cls, 
+        token: str, 
+        base_url: Optional[str] = None
+    ) -> 'SNUQ':
+        """
+        Create SNUQ client for web environment with existing token.
+        
+        Args:
+            token: Authentication token from web login
+            base_url: Optional base URL (defaults to /api for same-origin)
+            
+        Returns:
+            SNUQ instance ready to use
+        """
+        # For web environment, default to relative API path
+        web_base_url = base_url or "/api"
+        return cls(base_url=web_base_url, token=token, verify_ssl=False)
+
+    def set_web_token(self, token: str, base_url: Optional[str] = None) -> None:
+        """
+        Configure client for web environment with token.
+        
+        Args:
+            token: Authentication token from web login
+            base_url: Optional base URL (defaults to /api for same-origin)
+        """
+        if base_url:
+            self.base_url = base_url
+        elif self.base_url == self.BASE_URL:  # Only change if still default
+            self.base_url = "/api"  # Default for web environment
+        
+        self.set_token(token)
+        self.verify_ssl = False  # Usually not needed for same-origin requests
 
     def set_token(self, token: str) -> None:
         """
