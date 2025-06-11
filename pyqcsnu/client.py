@@ -15,12 +15,11 @@ from qiskit.quantum_info import Pauli, SparsePauliOp
 from qiskit.qasm2 import dumps
 import numpy as np
 
-from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams, Hamiltonian
+from .models import BlackholeJob, BlackholeResult, SNUBackend, MitigationParams, Hamiltonian
 from .exceptions import (
     QuantumClientError,
     AuthenticationError,
     JobError,
-    ExperimentError,
     BackendError,
 )
 
@@ -182,8 +181,6 @@ class SNUQ:
                 error_data = response.json() if response.text else {"error": "Unknown error"}
                 if "job" in endpoint:
                     raise JobError(error_data.get("error", "Job operation failed"))
-                elif "experiment" in endpoint:
-                    raise ExperimentError(error_data.get("error", "Experiment operation failed"))
                 elif "backend" in endpoint:
                     raise BackendError(error_data.get("error", "Backend operation failed"))
                 else:
@@ -262,7 +259,7 @@ class SNUQ:
         response = self._make_request("POST", "/api/runner/jobs/create/", data=job_data)
         return BlackholeJob.from_dict(response)
 
-    def list_jobs(self, status: Optional[str] = None) -> List[BlackholeJob]:
+    def list_running_jobs(self, status: Optional[str] = None) -> List[BlackholeJob]:
         """
         List all jobs, optionally filtered by status.
         
@@ -276,7 +273,7 @@ class SNUQ:
         response = self._make_request("GET", "/api/runner/jobs/", params=params)
         return [BlackholeJob.from_dict(job_data) for job_data in response]
 
-    def get_job(self, job_id: int) -> BlackholeJob:
+    def get_running_job(self, job_id: int) -> BlackholeJob:
         """
         Get details for a specific job.
         
@@ -288,8 +285,18 @@ class SNUQ:
         """
         response = self._make_request("GET", f"/api/runner/jobs/{job_id}/")
         return BlackholeJob.from_dict(response)
+    
+    def get_archived_jobs(self) -> List[BlackholeJob]:
+        """
+        Get a list of archived jobs.
+        
+        Returns:
+            List of BlackholeJob objects representing archived jobs
+        """
+        response = self._make_request("GET", "/api/runner/archives/")
+        return [BlackholeJob.from_dict(job_data) for job_data in response]
 
-    def get_job_results(self, job_id: int) -> BlackholeResult:
+    def get_results(self, job_id: int) -> BlackholeResult:
         """
         Get results for a completed job.
         
@@ -299,7 +306,7 @@ class SNUQ:
         Returns:
             BlackholeResult object containing the job results
         """
-        response = self._make_request("GET", f"/api/runner/jobs/{job_id}/results/")
+        response = self._make_request("GET", f"/api/runner/archives/{job_id}/")
         return BlackholeResult.from_dict(response)
 
     def cancel_job(self, job_id: int) -> bool:
@@ -321,7 +328,7 @@ class SNUQ:
     def wait_for_job(
         self,
         job_id: int,
-        polling_interval: int = 5,
+        polling_interval: int = 1,
         timeout: int = 300,
         status_callback: Optional[callable] = None
     ) -> Tuple[bool, Union[BlackholeResult, Dict]]:
@@ -338,16 +345,15 @@ class SNUQ:
             Tuple of (success, result) where result is either a BlackholeResult object or error dict
         """
         start_time = time.time()
-        
         while time.time() - start_time < timeout:
             try:
-                job = self.get_job(job_id)
+                job = self.get_running_job(job_id)
                 
                 if status_callback:
                     status_callback(job.status, job.to_dict())
                 
                 if job.status == "completed":
-                    return True, self.get_job_results(job_id)
+                    return True, job
                 elif job.status == "error":
                     return False, {"error": job.error_message or "Job failed"}
                 elif job.status == "cancelled":
@@ -360,8 +366,10 @@ class SNUQ:
         
         return False, {"error": "Timeout waiting for job completion"}
 
-    # Experiment Management Methods
-    def create_experiment(
+    # No access to executions must be given by the server
+    '''
+    # Execution Management Methods
+    def create_execution(
         self,
         pulse_schedule: Dict,
         external_run_id: int
@@ -395,6 +403,7 @@ class SNUQ:
         """
         response = self._make_request("GET", f"/api/experiments/{experiment_id}/")
         return BlackholeExperiment.from_dict(response)
+    '''
 
     # Backend Management Methods
     def list_backends(self) -> List[SNUBackend]:
@@ -423,6 +432,15 @@ class SNUQ:
             params={"name": backend_name},
         )
     
+    def job_to_res(self, job : BlackholeJob) -> BlackholeResult :
+        """
+        Convert a BlackholeResult into a BlackholeJob by reusing
+        """ 
+
+        job_payload = Dict[str, Any] = job.to_dict()
+
+        return BlackholeResult.from_dict(job_payload)
+
     def run(
         self,
         circuit: QuantumCircuit,
@@ -489,7 +507,7 @@ class SNUQ:
             raise JobError(f"Job {job.id} failed: {msg}")
 
         # 3. Convert service result → Qiskit Result
-        bh_res: BlackholeResult = res_or_err
+        bh_res: BlackholeResult = self.job_to_res(res_or_err)
         result_dict = {
             "backend_name": backend,
             "backend_version": "0.0.1",

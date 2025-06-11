@@ -312,6 +312,7 @@ class BlackholeJob:
             metadata=data.get("metadata", {})
         )
 
+'''
 @dataclass
 class BlackholeExperiment:
     """Represents a quantum experiment run."""
@@ -351,21 +352,24 @@ class BlackholeExperiment:
             error_message=data.get("error_message"),
             metadata=data.get("metadata", {})
         )
+'''
 
 @dataclass
 class BlackholeResult:
     """Represents the results of a quantum computing job."""
-    job_id: int
+    id: int
+    job_id: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     processed_results: Optional[Dict[str, Any]] = None
-    error_mitigation: Optional[Dict[str, Any]] = None
+    mitigation_params: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "id" : self.id,
             "job_id": self.job_id,
             "metadata": self.metadata,
             "processed_results": self.processed_results,
-            "error_mitigation": self.error_mitigation,
+            "mitigation_params": self.mitigation_params,
         }
 
     # ---------- FIXED ----------
@@ -381,10 +385,11 @@ class BlackholeResult:
         """
         
         return cls(
-            job_id=data.get("job_id") or data.get("id"),
+            id = data.get("id"),
+            job_id=data.get("job_id"),
             metadata=data.get("metadata", {}),
             processed_results=data.get("processed_results"),
-            error_mitigation=data.get("error_mitigation"),
+            mitigation_params=data.get("mitigation_params"),
         )
 
     def get_expectation_value(self, observable: Dict[str, float]) -> float:

@@ -18,10 +18,6 @@ class JobError(QuantumClientError):
     """Raised when a job operation fails."""
     pass
 
-class ExperimentError(QuantumClientError):
-    """Raised when an experiment operation fails."""
-    pass
-
 class BackendError(QuantumClientError):
     """Raised when a backend operation fails."""
     pass
