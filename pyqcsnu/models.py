@@ -371,6 +371,8 @@ class BlackholeResult:
             "metadata": self.metadata,
             "results": self.results,
             "error_mitigation": self.error_mitigation,
+            "backend": self.backend,
+            "shots": self.shots
         }
 
     # ---------- FIXED ----------
@@ -394,6 +396,8 @@ class BlackholeResult:
             metadata=data.get("metadata", {}),
             results=res,
             error_mitigation=data.get("error_mitigation"),
+            backend=data.get("backend"),
+            shots=data.get("shots")
         )
 
     def get_expectation_value(self, observable: Dict[str, float]) -> float:
