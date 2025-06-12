@@ -8,6 +8,9 @@ import os
 from typing import Dict, List, Optional, Union, Tuple, Any
 import requests
 from requests.exceptions import RequestException
+import logging
+
+logger = logging.getLogger(__name__)
 from qiskit import QuantumCircuit
 from datetime import datetime, timezone
 from qiskit.result import Result
@@ -48,7 +51,7 @@ class SNUQ:
         """
         # Get base URL from environment variable if not provided
         self.base_url = self.BASE_URL
-        
+
         self.token = token
         self.timeout = timeout
         self.verify_ssl = verify_ssl
@@ -63,6 +66,14 @@ class SNUQ:
         if token:
             self.set_token(token)
 
+        logger.debug(
+            "Client initialized: base_url=%s, timeout=%s, verify_ssl=%s, token_provided=%s",
+            self.base_url,
+            self.timeout,
+            self.verify_ssl,
+            token is not None,
+        )
+
     def set_token(self, token: str) -> None:
         """
         Set or update the authentication token.
@@ -72,6 +83,7 @@ class SNUQ:
         """
         self.token = token
         self.session.headers.update({"Authorization": f"Token {token}"})
+        logger.debug("Authentication token set")
 
     def login(self, username: str, password: str) -> bool:
         """
@@ -88,6 +100,7 @@ class SNUQ:
             AuthenticationError: If login fails
         """
         url = f"{self.base_url}/api/user/login/"
+        logger.info("Logging in user %s", username)
         try:
             response = self.session.post(
                 url,
@@ -99,11 +112,14 @@ class SNUQ:
             if response.status_code == 200:
                 data = response.json()
                 self.set_token(data["token"])
+                logger.info("Login successful")
                 return 'success'
             else:
+                logger.error("Login failed: %s", response.text)
                 raise AuthenticationError(f"Login failed: {response.text}")
                 
         except RequestException as e:
+            logger.error("Login request exception: %s", e)
             raise AuthenticationError(f"Login request failed: {str(e)}")
 
     def login_with_token(self, token: str) -> None:
@@ -117,12 +133,14 @@ class SNUQ:
             AuthenticationError: If token is invalid
         """
         self.set_token(token)
+        logger.info("Logging in with existing token")
         # Verify token is valid by making a simple request
         try:
             self._make_request("GET", "/api/hardware/")
         except AuthenticationError:
             self.token = None
             self.session.headers.pop("Authorization", None)
+            logger.error("Invalid token provided")
             raise AuthenticationError("Invalid token")
 
     def _make_request(
@@ -159,6 +177,10 @@ class SNUQ:
         url = f"{self.base_url}{endpoint}"
         timeout = timeout or self.timeout
 
+        logger.debug(
+            "HTTP %s request to %s with params=%s data=%s", method, url, params, data
+        )
+
         try:
             if method == "GET":
                 response = self.session.get(url, params=params, timeout=timeout, verify=self.verify_ssl)
@@ -170,6 +192,8 @@ class SNUQ:
                 response = self.session.delete(url, timeout=timeout, verify=self.verify_ssl)
             else:
                 raise QuantumClientError(f"Unsupported method: {method}")
+
+            logger.debug("Response status: %s", response.status_code)
 
             # Handle different status codes
             if response.status_code >= 500:
@@ -191,11 +215,15 @@ class SNUQ:
 
             # Parse response
             try:
-                return response.json()
+                parsed = response.json()
             except json.JSONDecodeError:
-                return {"message": response.text}
+                parsed = {"message": response.text}
+
+            logger.debug("Response parsed successfully")
+            return parsed
 
         except RequestException as e:
+            logger.error("Request failed: %s", e)
             raise QuantumClientError(f"Request failed: {str(e)}")
 
     # Job Management Methods
@@ -229,6 +257,8 @@ class SNUQ:
         """
         if not self.token:
             raise AuthenticationError("Not authenticated. Call login() first.")
+
+        logger.info("Creating job on backend %s", backend)
         qasm = None
         if isinstance(circuit, QuantumCircuit):
             try:
@@ -257,9 +287,10 @@ class SNUQ:
         if hamiltonian:
             job_data["hamiltonian"] = hamiltonian.to_dict()
             job_data["experiment_type"] = "EXPVAL"
-        
+
         # Create job
         response = self._make_request("POST", "/api/runner/jobs/create/", data=job_data)
+        logger.info("Job created with ID %s", response.get("id"))
         return BlackholeJob.from_dict(response)
 
     def list_jobs(self, status: Optional[str] = None) -> List[BlackholeJob]:
@@ -273,6 +304,7 @@ class SNUQ:
             List of BlackholeJob objects
         """
         params = {"status": status} if status else None
+        logger.debug("Listing jobs with params %s", params)
         response = self._make_request("GET", "/api/runner/jobs/", params=params)
         return [BlackholeJob.from_dict(job_data) for job_data in response]
 
@@ -286,6 +318,7 @@ class SNUQ:
         Returns:
             BlackholeJob object with current status and details
         """
+        logger.debug("Fetching job %s", job_id)
         response = self._make_request("GET", f"/api/runner/jobs/{job_id}/")
         return BlackholeJob.from_dict(response)
 
@@ -299,6 +332,7 @@ class SNUQ:
         Returns:
             BlackholeResult object containing the job results
         """
+        logger.debug("Fetching results for job %s", job_id)
         response = self._make_request("GET", f"/api/runner/jobs/{job_id}/results/")
         return BlackholeResult.from_dict(response)
 
@@ -315,6 +349,7 @@ class SNUQ:
         Raises:
             JobError: If cancellation fails
         """
+        logger.info("Cancelling job %s", job_id)
         response = self._make_request("DELETE", f"/api/runner/jobs/{job_id}/cancel/")
         return response.get("status") == "cancelled"
 
@@ -337,27 +372,35 @@ class SNUQ:
         Returns:
             Tuple of (success, result) where result is either a BlackholeResult object or error dict
         """
+        logger.info("Waiting for job %s", job_id)
         start_time = time.time()
         
         while time.time() - start_time < timeout:
             try:
                 job = self.get_job(job_id)
-                
+
                 if status_callback:
                     status_callback(job.status, job.to_dict())
+
+                logger.debug("Job %s status: %s", job_id, job.status)
                 
                 if job.status == "completed":
+                    logger.info("Job %s completed", job_id)
                     return True, self.get_job_results(job_id)
                 elif job.status == "error":
+                    logger.error("Job %s errored: %s", job_id, job.error_message)
                     return False, {"error": job.error_message or "Job failed"}
                 elif job.status == "cancelled":
+                    logger.warning("Job %s was cancelled", job_id)
                     return False, {"error": "Job was cancelled"}
                 
                 time.sleep(polling_interval)
                 
             except (JobError, QuantumClientError) as e:
+                logger.error("Error while waiting for job %s: %s", job_id, e)
                 return False, {"error": str(e)}
-        
+
+        logger.error("Timeout waiting for job %s completion", job_id)
         return False, {"error": "Timeout waiting for job completion"}
 
     # Experiment Management Methods
@@ -380,7 +423,9 @@ class SNUQ:
             "pulse_schedule": pulse_schedule,
             "external_run_id": external_run_id
         }
+        logger.info("Creating experiment run")
         response = self._make_request("POST", "/api/experiments/", data=data)
+        logger.debug("Experiment created with response %s", response)
         return BlackholeExperiment.from_dict(response)
 
     def get_experiment(self, experiment_id: int) -> BlackholeExperiment:
@@ -393,6 +438,7 @@ class SNUQ:
         Returns:
             BlackholeExperiment object with current status and details
         """
+        logger.debug("Fetching experiment %s", experiment_id)
         response = self._make_request("GET", f"/api/experiments/{experiment_id}/")
         return BlackholeExperiment.from_dict(response)
 
@@ -406,6 +452,7 @@ class SNUQ:
         List[SNUBackend]
             Each item has .name, .graph_data, .pending_jobs (and legacy fields = None).
         """
+        logger.debug("Listing available backends")
         response = self._make_request("GET", "/api/hardware/")
         return [SNUBackend.from_dict(obj) for obj in response]
 
@@ -417,6 +464,7 @@ class SNUQ:
         The `hardware-status` view is mounted at `/api/hardware/status/`
         and expects `?name=<backend>` as a query parameter.
         """
+        logger.debug("Fetching backend status for %s", backend_name)
         return self._make_request(
             "GET",
             "/api/hardware/status/",
@@ -468,6 +516,7 @@ class SNUQ:
         TimeoutError
             If the job is not finished within *timeout* seconds.
         """
+        logger.info("Running circuit on backend %s", backend)
         # 1. Submit
         job = self.create_job(
             circuit=circuit,
@@ -488,6 +537,7 @@ class SNUQ:
             msg = res_or_err.get("error", "Unknown job failure")
             raise JobError(f"Job {job.id} failed: {msg}")
 
+        logger.info("Job %s completed successfully", job.id)
         # 3. Convert service result → Qiskit Result
         bh_res: BlackholeResult = res_or_err
         result_dict = {
@@ -554,6 +604,8 @@ class SNUQ:
             The expectation value of the Hamiltonian.
         """
 
+        logger.info("Running expectation value on backend %s", backend)
+
         num_qubits = circuit.num_qubits
 
         if isinstance(operators, Pauli):
@@ -597,4 +649,5 @@ class SNUQ:
             msg = res_or_err.get("error", "Unknown job failure")
             raise JobError(f"Job {job.id} failed: {msg}")
         
+        logger.info("Expectation value job %s completed", job.id)
         return res_or_err.processed_results["expval"]
