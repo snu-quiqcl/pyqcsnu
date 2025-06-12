@@ -27,6 +27,14 @@ from .exceptions import (
     BackendError,
 )
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    filename = os.getenv("PYQCSNU_LOG_FILE", "pyqcsnu.log"),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    filemode="w",
+)
+
 class SNUQ:
     """Client for interacting with the SNU quantum computing services API."""
     
@@ -322,7 +330,7 @@ class SNUQ:
         response = self._make_request("GET", f"/api/runner/jobs/{job_id}/")
         return BlackholeJob.from_dict(response)
 
-    def get_job_results(self, job_id: int) -> BlackholeResult:
+    def get_results(self, job_id: int) -> BlackholeResult:
         """
         Get results for a completed job.
         
@@ -333,7 +341,7 @@ class SNUQ:
             BlackholeResult object containing the job results
         """
         logger.debug("Fetching results for job %s", job_id)
-        response = self._make_request("GET", f"/api/runner/jobs/{job_id}/results/")
+        response = self._make_request("GET", f"/api/runner/archives/{job_id}/")
         return BlackholeResult.from_dict(response)
 
     def cancel_job(self, job_id: int) -> bool:
@@ -386,7 +394,7 @@ class SNUQ:
                 
                 if job.status == "completed":
                     logger.info("Job %s completed", job_id)
-                    return True, self.get_job_results(job_id)
+                    return True, job
                 elif job.status == "error":
                     logger.error("Job %s errored: %s", job_id, job.error_message)
                     return False, {"error": job.error_message or "Job failed"}
@@ -532,6 +540,7 @@ class SNUQ:
             polling_interval=polling_interval,
             timeout=timeout,
         )
+
         if not ok:
             # `res_or_err` is an error dict from wait_for_job
             msg = res_or_err.get("error", "Unknown job failure")

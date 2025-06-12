@@ -277,6 +277,7 @@ class BlackholeJob:
     shots: int
     created_at: datetime
     updated_at: datetime
+    processed_results: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
     mitigation_params: Optional[MitigationParams] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -291,6 +292,7 @@ class BlackholeJob:
             "shots": self.shots,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "processed_results": self.processed_results if hasattr(self, 'processed_results') else None,
             "error_message": self.error_message,
             "mitigation_params": self.mitigation_params.to_dict() if self.mitigation_params else None,
             "metadata": self.metadata
@@ -307,10 +309,12 @@ class BlackholeJob:
             shots=data["shots"],
             created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
+            processed_results=data["processed_results"],
             error_message=data.get("error_message"),
             mitigation_params=MitigationParams.from_dict(data["mitigation_params"]) if data.get("mitigation_params") else None,
             metadata=data.get("metadata", {})
         )
+
 
 @dataclass
 class BlackholeExperiment:
@@ -352,19 +356,20 @@ class BlackholeExperiment:
             metadata=data.get("metadata", {})
         )
 
+        
 @dataclass
 class BlackholeResult:
     """Represents the results of a quantum computing job."""
     job_id: int
     metadata: Dict[str, Any] = field(default_factory=dict)
-    processed_results: Optional[Dict[str, Any]] = None
+    results: Optional[Dict[str, Any]] = None
     error_mitigation: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "job_id": self.job_id,
             "metadata": self.metadata,
-            "processed_results": self.processed_results,
+            "results": self.results,
             "error_mitigation": self.error_mitigation,
         }
 
@@ -379,11 +384,15 @@ class BlackholeResult:
             • The processed results will be either 'counts' or 'expval' depending on the job type
             • 'job_id'  or 'id'
         """
+
+        res = data.get("results")
+        if res is None:
+            res = data.get("processed_results")
         
         return cls(
             job_id=data.get("job_id") or data.get("id"),
             metadata=data.get("metadata", {}),
-            processed_results=data.get("processed_results"),
+            results=res,
             error_mitigation=data.get("error_mitigation"),
         )
 
@@ -397,14 +406,9 @@ class BlackholeResult:
         Returns:
             Expectation value
         """
-        expectation = 0.0
-        total_shots = sum(self.counts.values())
+        # TODO: Implement expectation value calculation based on the observable
         
-        for bitstring, count in self.counts.items():
-            if bitstring in observable:
-                expectation += observable[bitstring] * (count / total_shots)
-        
-        return expectation
+        # return expval
     
     def get_probability(self, bitstring: str) -> float:
         """
@@ -416,5 +420,9 @@ class BlackholeResult:
         Returns:
             Probability of the bitstring
         """
-        total_shots = sum(self.counts.values())
-        return self.counts.get(bitstring, 0) / total_shots 
+        if not self.results or 'counts' not in self.results:
+            from pyqcsnu.pyqcsnu.exceptions import ResultError
+            raise ResultError("No counts available in results")
+
+        total_shots = sum(self.results['counts'].values())
+        return self.results['counts'].get(bitstring, 0) / total_shots
