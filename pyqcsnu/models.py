@@ -287,7 +287,7 @@ class BlackholeJob:
         return {
             "id": self.id,
             "status": self.status,
-            "circuit_info": self.circuit.to_dict(),
+            "circuit_info": self.circuit,
             "backend": self.backend,
             "shots": self.shots,
             "created_at": self.created_at.isoformat(),
@@ -425,7 +425,7 @@ class BlackholeResult:
             Probability of the bitstring
         """
         if not self.results or 'counts' not in self.results:
-            from pyqcsnu.pyqcsnu.exceptions import ResultError
+            from pyqcsnu.exceptions import ResultError
             raise ResultError("No counts available in results")
 
         total_shots = sum(self.results['counts'].values())

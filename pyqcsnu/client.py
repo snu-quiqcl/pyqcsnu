@@ -43,6 +43,7 @@ class SNUQ:
     
     def __init__(
         self,
+        base_url: Optional[str] = None,
         token: Optional[str] = None,
         timeout: int = 30,
         verify_ssl: bool = True
@@ -58,7 +59,7 @@ class SNUQ:
             verify_ssl: Whether to verify SSL certificates
         """
         # Get base URL from environment variable if not provided
-        self.base_url = self.BASE_URL
+        self.base_url = (base_url or os.getenv("PYQCSNU_BASE_URL") or self.BASE_URL).rstrip("/")
 
         self.token = token
         self.timeout = timeout
@@ -179,7 +180,8 @@ class SNUQ:
             ExperimentError: For experiment-related errors
             BackendError: For backend-related errors
         """
-        if not self.token and endpoint != "/api/token/":
+        public_endpoints = ("/api/user/login/", "/api/user/register/")
+        if not self.token and endpoint not in public_endpoints:
             raise AuthenticationError("Not authenticated. Call login() first.")
 
         url = f"{self.base_url}{endpoint}"
@@ -211,15 +213,19 @@ class SNUQ:
             elif response.status_code == 403:
                 raise AuthenticationError("Permission denied")
             elif response.status_code >= 400:
-                error_data = response.json() if response.text else {"error": "Unknown error"}
+                try:
+                    error_data = response.json() if response.text else {"detail": "Unknown error"}
+                except json.JSONDecodeError:
+                    error_data = {"detail": response.text or "Unknown error"}
+                error_message = error_data.get("detail") or error_data.get("error") or error_data.get("message") or "Operation failed"
                 if "job" in endpoint:
-                    raise JobError(error_data.get("error", "Job operation failed"))
+                    raise JobError(error_message)
                 elif "experiment" in endpoint:
-                    raise ExperimentError(error_data.get("error", "Experiment operation failed"))
-                elif "backend" in endpoint:
-                    raise BackendError(error_data.get("error", "Backend operation failed"))
+                    raise ExperimentError(error_message)
+                elif "backend" in endpoint or "hardware" in endpoint:
+                    raise BackendError(error_message)
                 else:
-                    raise QuantumClientError(error_data.get("error", "Operation failed"))
+                    raise QuantumClientError(error_message)
 
             # Parse response
             try:
@@ -291,7 +297,7 @@ class SNUQ:
         if mitigation_params:
             job_data["mitigation_params"] = mitigation_params.to_dict()
         if name:
-            job_data["name"] = name
+            job_data["job_name"] = name
         if hamiltonian:
             job_data["hamiltonian"] = hamiltonian.to_dict()
             job_data["experiment_type"] = "EXPVAL"
@@ -358,8 +364,8 @@ class SNUQ:
             JobError: If cancellation fails
         """
         logger.info("Cancelling job %s", job_id)
-        response = self._make_request("DELETE", f"/api/runner/jobs/{job_id}/cancel/")
-        return response.get("status") == "cancelled"
+        response = self._make_request("DELETE", f"/api/runner/jobs/{job_id}/")
+        return "cancelled" in response.get("detail", "").lower()
 
     def wait_for_job(
         self,
@@ -367,7 +373,7 @@ class SNUQ:
         polling_interval: int = 5,
         timeout: int = 300,
         status_callback: Optional[callable] = None
-    ) -> Tuple[bool, Union[BlackholeResult, Dict]]:
+    ) -> Tuple[bool, Union[BlackholeJob, Dict]]:
         """
         Wait for a job to complete, with optional status updates.
         
@@ -378,7 +384,7 @@ class SNUQ:
             status_callback: Optional callback function(status, job_data) for status updates
             
         Returns:
-            Tuple of (success, result) where result is either a BlackholeResult object or error dict
+            Tuple of (success, result) where result is either a completed BlackholeJob object or error dict
         """
         logger.info("Waiting for job %s", job_id)
         start_time = time.time()
@@ -432,7 +438,7 @@ class SNUQ:
             "external_run_id": external_run_id
         }
         logger.info("Creating experiment run")
-        response = self._make_request("POST", "/api/experiments/", data=data)
+        response = self._make_request("POST", "/api/executions/", data=data)
         logger.debug("Experiment created with response %s", response)
         return BlackholeExperiment.from_dict(response)
 
@@ -447,7 +453,7 @@ class SNUQ:
             BlackholeExperiment object with current status and details
         """
         logger.debug("Fetching experiment %s", experiment_id)
-        response = self._make_request("GET", f"/api/experiments/{experiment_id}/")
+        response = self._make_request("GET", f"/api/executions/{experiment_id}/")
         return BlackholeExperiment.from_dict(response)
 
     # Backend Management Methods
@@ -469,13 +475,13 @@ class SNUQ:
         """
         Get live job-queue length for a single backend.
 
-        The `hardware-status` view is mounted at `/api/hardware/status/`
+        The `hardware-status` view is mounted at `/api/status/`
         and expects `?name=<backend>` as a query parameter.
         """
         logger.debug("Fetching backend status for %s", backend_name)
         return self._make_request(
             "GET",
-            "/api/hardware/status/",
+            "/api/status/",
             params={"name": backend_name},
         )
     
@@ -548,7 +554,10 @@ class SNUQ:
 
         logger.info("Job %s completed successfully", job.id)
         # 3. Convert service result → Qiskit Result
-        bh_res: BlackholeResult = res_or_err
+        completed_job: BlackholeJob = res_or_err
+        processed_results = completed_job.processed_results or {}
+        if "counts" not in processed_results:
+            raise JobError(f"Job {job.id} completed without counts in processed_results")
         result_dict = {
             "backend_name": backend,
             "backend_version": "0.0.1",
@@ -566,8 +575,7 @@ class SNUQ:
                         "n_qubits": circuit.num_qubits,
                     },
                     "data": {
-                        # Expecting BlackholeResult.processed_results["counts"] == {'00': 512, '11': 512, …}
-                        "counts": {k: v for k, v in bh_res.processed_results["counts"].items()},
+                        "counts": {k: v for k, v in processed_results["counts"].items()},
                     },
                 }
             ],
@@ -659,4 +667,7 @@ class SNUQ:
             raise JobError(f"Job {job.id} failed: {msg}")
         
         logger.info("Expectation value job %s completed", job.id)
-        return res_or_err.processed_results["expval"]
+        processed_results = res_or_err.processed_results or {}
+        if "expval" not in processed_results:
+            raise JobError(f"Job {job.id} completed without expval in processed_results")
+        return processed_results["expval"]
