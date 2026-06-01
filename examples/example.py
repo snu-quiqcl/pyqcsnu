@@ -4,7 +4,7 @@ Qiskit workflow using PyQCSNU as the execution backend.
 Start the local backend stack first:
 
     cd /home/quiqclserver
-    ./run_pyqcsnu_stack.sh --mock-proxy
+    ./run_server.sh --mock-proxy
 
 Then run this example:
 
@@ -31,9 +31,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from pyqcsnu import SNUQ
 
+LOCAL_BASE_URL = "http://localhost:8000"
+LOCAL_USERNAME = "admin"
+LOCAL_PASSWORD = "adminpassword"
+
 
 def load_local_env() -> None:
-    """Load variables written by run_pyqcsnu_stack.sh, if present."""
+    """Load non-secret variables written by run_stack.sh, if present."""
     env_path = PROJECT_ROOT / ".env.local"
     if not env_path.exists():
         return
@@ -60,20 +64,10 @@ def build_circuit() -> QuantumCircuit:
 
 
 def get_client() -> SNUQ:
-    """Create an authenticated PyQCSNU client from environment variables."""
-    token = os.getenv("PYQCSNU_TOKEN")
-    username = os.getenv("PYQCSNU_USERNAME")
-    password = os.getenv("PYQCSNU_PASSWORD")
-
-    client = SNUQ()
-    if token:
-        client.login_with_token(token)
-    elif username and password:
-        client.login(username, password)
-    else:
-        # Default to a hardcoded token for local development with the mock proxy.
-        client = SNUQ(token="656b73fa59fa0608426275bc5fb3339147a39789")
-    
+    """Create an authenticated PyQCSNU client for the local controlserver."""
+    base_url = os.getenv("PYQCSNU_BASE_URL", LOCAL_BASE_URL)
+    client = SNUQ(base_url=base_url)
+    client.login(LOCAL_USERNAME, LOCAL_PASSWORD)
     return client
 
 
