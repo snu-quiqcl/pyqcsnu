@@ -55,7 +55,7 @@ qc.cx(0, 1)
 qc.measure([0, 1], [0, 1])
 
 # 3  Run & get a Qiskit Result
-result = client.run(qc, backend="Cassiopeia", shots=2048)   # qiskit.result.Result instance
+result = client.run(qc, backend="Blackhole", shots=2048)   # qiskit.result.Result instance
 print(result.get_counts())  # {'00': 1012, '11': 1036}
 ```
 
@@ -90,7 +90,7 @@ to JSON or build them via `.model_validate()`.
 ### Submit now, fetch later
 
 ```python
-job = client.create_job(qc, backend="Cassiopeia", shots=5000)
+job = client.create_job(qc, backend="Blackhole", shots=5000)
 print(job.id, job.status)
 
 # ... do other work ...
@@ -108,6 +108,28 @@ if job.status != "completed":
 | Variable           | Role                                                       |
 | ------------------ | ---------------------------------------------------------- |
 | `PYQCSNU_TOKEN`    | If set, `SNUQ()` will pick it up so you can skip `login()` |
+| `PYQCSNU_BASE_URL` | Local or remote Blackhole API URL                          |
+| `PYQCSNU_BACKEND`  | Backend name used by examples; defaults to `Blackhole`     |
+| `PYQCSNU_SHOTS`    | Shot count used by examples                                |
+
+### Local Blackhole smoke test
+
+Start the local control server and mock proxy from the shared workspace:
+
+```bash
+cd /home/quiqclserver
+./run_server.sh --mock-proxy --check
+```
+
+Then run the Qiskit workflow example:
+
+```bash
+cd /home/quiqclserver/pyqcsnu
+python examples/example.py
+```
+
+Edit `build_circuit()` in `examples/example.py` to try different circuits
+against the mock proxy.
 
 ---
 

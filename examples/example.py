@@ -37,7 +37,7 @@ LOCAL_PASSWORD = "adminpassword"
 
 
 def load_local_env() -> None:
-    """Load non-secret variables written by run_stack.sh, if present."""
+    """Load non-secret variables written by run_server.sh, if present."""
     env_path = PROJECT_ROOT / ".env.local"
     if not env_path.exists():
         return
@@ -56,7 +56,7 @@ def load_local_env() -> None:
 
 def build_circuit() -> QuantumCircuit:
     """Build a small circuit using normal Qiskit APIs."""
-    circuit = QuantumCircuit(2, 2, name="pyqcsnu_bell_workflow")
+    circuit = QuantumCircuit(2, 2)
     circuit.h(0)
     circuit.cx(0, 1)
     circuit.measure([0, 1], [0, 1])
@@ -86,26 +86,45 @@ def print_counts_summary(result: Result) -> None:
         print(f"\nMost frequent outcome: {ranked_counts[0][0]}")
 
 
+def print_hardware_status(client: SNUQ) -> None:
+    """Print configured hardware backends and their live controlserver status."""
+    backends = client.list_backends()
+
+    print("\nHardware")
+    print(f"  {'name':<16} {'active':<8} {'mode':<12} {'pending':<8} status")
+    print(f"  {'-' * 16} {'-' * 8} {'-' * 12} {'-' * 8} {'-' * 16}")
+
+    for backend in backends:
+        try:
+            status = client.get_backend_status(backend.name)
+        except Exception as exc:
+            print(f"  {backend.name:<16} {'?':<8} {'?':<12} {backend.pending_jobs:<8} error: {exc}")
+            continue
+
+        active = status.get("active", "?")
+        mode = status.get("mode", status.get("system_mode", "?"))
+        pending_jobs = status.get("pending_jobs", backend.pending_jobs)
+        status_text = status.get("status", "ok")
+        print(f"  {backend.name:<16} {str(active):<8} {str(mode):<12} {pending_jobs:<8} {status_text}")
+
+
 def main() -> None:
     load_local_env()
 
-    backend = os.getenv("PYQCSNU_BACKEND", "Cassiopeia")
-    shots = int(os.getenv("PYQCSNU_SHOTS", "1024"))
+    backend = "Trinity"
 
     client = get_client()
+    print_hardware_status(client)
+
     circuit = build_circuit()
 
     print("Circuit")
     print(circuit.draw(output="text"))
 
-    print(f"\nSubmitting to {backend} with {shots} shots...")
+    print(f"\nSubmitting to {backend}...")
     result = client.run(
         circuit,
         backend=backend,
-        shots=shots,
-        name="pyqcsnu-qiskit-workflow-example",
-        polling_interval=1,
-        timeout=120,
     )
 
     print(f"\nQiskit Result success: {result.success}")
