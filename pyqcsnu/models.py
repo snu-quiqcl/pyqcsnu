@@ -237,6 +237,10 @@ class SNUBackend:
     name: str
     graph_data: Dict[str, Any] = field(default_factory=dict)
     pending_jobs: int = 0
+    active: bool = True
+    description: str = ""
+    num_qubits: int = None
+    native_gates: List[Dict[str, Any]] = field(default_factory=list)
 
     # --- legacy / optional fields --------------------------------------------
     status: str = None
@@ -247,8 +251,12 @@ class SNUBackend:
         """Serialise to a plain dict (round-trippable with `from_dict`)."""
         return {
             "name": self.name,
-            # "graph_data": self.graph_data,
+            "graph_data": self.graph_data,
             "pending_jobs": self.pending_jobs,
+            "active": self.active,
+            "description": self.description,
+            "num_qubits": self.num_qubits,
+            "native_gates": self.native_gates,
             "status": self.status,
             "n_qubits": self.n_qubits,
             "metadata": self.metadata,
@@ -259,10 +267,14 @@ class SNUBackend:
         """Construct from API payload."""
         return cls(
             name=data["name"],
-            #graph_data=data.get("graph_data", {}),
+            graph_data=data.get("graph_data", {}),
             pending_jobs=data.get("pending_jobs", 0),
+            active=data.get("active", True),
+            description=data.get("description", ""),
+            num_qubits=data.get("num_qubits"),
+            native_gates=data.get("native_gates", []),
             status=data.get("status"),             # not in new payload → None
-            n_qubits=data.get("n_qubits"),         # not in new payload → None
+            n_qubits=data.get("n_qubits", data.get("num_qubits")),
             metadata=data.get("metadata", {}),
         )
 
