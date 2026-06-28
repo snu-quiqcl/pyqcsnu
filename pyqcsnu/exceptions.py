@@ -18,6 +18,10 @@ class JobError(QuantumClientError):
     """Raised when a job operation fails."""
     pass
 
+class IonLossError(JobError):
+    """Raised when a job is paused because hardware ion loss was detected."""
+    pass
+
 class ExperimentError(QuantumClientError):
     """Raised when an experiment operation fails."""
     pass

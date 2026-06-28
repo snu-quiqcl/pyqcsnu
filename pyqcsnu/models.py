@@ -8,13 +8,15 @@ from datetime import datetime
 import json
 from pydantic import BaseModel, Field
 from qiskit import QuantumCircuit
+from qiskit.circuit import Parameter
+from qiskit.circuit.library import standard_gates
+from qiskit import qasm2
 
 
-'''
 class QCircuit(BaseModel):
     """Model representing a quantum circuit."""
     name: str = Field(..., description="Name of the circuit")
-    num_qubits: int = Field(..., description="Number of qubits in the circuit")
+    num_qubits: int = Field(0, description="Number of qubits in the circuit")
     gates: List[Dict[str, Any]] = Field(default_factory=list, description="List of quantum gates")
     parameters: Dict[str, float] = Field(default_factory=dict, description="Circuit parameters")
     qasm: Optional[str] = Field(None, description="OpenQASM representation of the circuit")
@@ -57,8 +59,8 @@ class QCircuit(BaseModel):
         for instruction, qargs, cargs in circuit.data:
             gate_dict = {
                 "name": instruction.name,
-                "qubits": [q._index for q in qargs],
-                "clbits": [c._index for c in cargs],
+                "qubits": [circuit.find_bit(q).index for q in qargs],
+                "clbits": [circuit.find_bit(c).index for c in cargs],
             }
             if instruction.params:
                 param_values = []
@@ -162,7 +164,9 @@ class QCircuit(BaseModel):
         """Create circuit from JSON string."""
         data = json.loads(json_str)
         return cls.from_dict(data)
-'''
+
+
+Circuit = QCircuit
 
 # Abstract dataclass for parameters for error mitigation
 @dataclass
@@ -282,7 +286,7 @@ class SNUBackend:
 class BlackholeJob:
     """Represents a quantum computing job."""
     
-    id: int
+    id: Union[int, str]
     status: str
     circuit: QuantumCircuit
     backend: str
@@ -313,15 +317,21 @@ class BlackholeJob:
     @classmethod
     def from_dict(cls, data: Dict) -> 'BlackholeJob':
         """Create a BlackholeJob instance from a dictionary."""
+        circuit_info = (
+            data.get("circuit_info")
+            or data.get("circuit")
+            or data.get("qasm")
+            or ""
+        )
         return cls(
             id=data["id"],
             status=data["status"],
-            circuit=data["circuit_info"],
+            circuit=circuit_info,
             backend=data["backend"],
             shots=data["shots"],
             created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
-            processed_results=data["processed_results"],
+            processed_results=data.get("processed_results"),
             error_message=data.get("error_message"),
             mitigation_params=MitigationParams.from_dict(data["mitigation_params"]) if data.get("mitigation_params") else None,
             metadata=data.get("metadata", {})
@@ -376,6 +386,8 @@ class BlackholeResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
     results: Optional[Dict[str, Any]] = None
     error_mitigation: Optional[Dict[str, Any]] = None
+    backend: Optional[str] = None
+    shots: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -402,6 +414,8 @@ class BlackholeResult:
         res = data.get("results")
         if res is None:
             res = data.get("processed_results")
+        if res is None and "counts" in data:
+            res = {"counts": data["counts"]}
         
         return cls(
             job_id=data.get("job_id") or data.get("id"),
@@ -411,6 +425,12 @@ class BlackholeResult:
             backend=data.get("backend"),
             shots=data.get("shots")
         )
+
+    @property
+    def counts(self) -> Dict[str, int]:
+        if not self.results:
+            return {}
+        return self.results.get("counts", {})
 
     def get_expectation_value(self, observable: Dict[str, float]) -> float:
         """
@@ -422,9 +442,17 @@ class BlackholeResult:
         Returns:
             Expectation value
         """
-        # TODO: Implement expectation value calculation based on the observable
-        
-        # return expval
+        if not self.counts:
+            from pyqcsnu.exceptions import ResultError
+            raise ResultError("No counts available in results")
+
+        total_shots = sum(self.counts.values())
+        if total_shots == 0:
+            return 0.0
+        return sum(
+            (self.counts.get(bitstring, 0) / total_shots) * coefficient
+            for bitstring, coefficient in observable.items()
+        )
     
     def get_probability(self, bitstring: str) -> float:
         """

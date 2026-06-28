@@ -23,6 +23,7 @@ from .exceptions import (
     QuantumClientError,
     AuthenticationError,
     JobError,
+    IonLossError,
     ExperimentError,
     BackendError,
 )
@@ -108,25 +109,33 @@ class SNUQ:
         Raises:
             AuthenticationError: If login fails
         """
-        url = f"{self.base_url}/api/user/login/"
+        urls = [
+            f"{self.base_url}/api/token/",
+            f"{self.base_url}/api/user/login/",
+        ]
         logger.info("Logging in user %s", username)
+        last_error = None
         try:
-            response = self.session.post(
-                url,
-                json={"username": username, "password": password},
-                timeout=self.timeout,
-                verify=self.verify_ssl
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                self.set_token(data["token"])
-                logger.info("Login successful")
-                return 'success'
-            else:
-                logger.error("Login failed: %s", response.text)
-                raise AuthenticationError(f"Login failed: {response.text}")
+            for url in urls:
+                response = self.session.post(
+                    url,
+                    json={"username": username, "password": password},
+                    timeout=self.timeout,
+                    verify=self.verify_ssl
+                )
                 
+                if response.status_code == 200:
+                    data = response.json()
+                    self.set_token(data["token"])
+                    logger.info("Login successful")
+                    return 'success'
+
+                last_error = response.text
+                if response.status_code != 404:
+                    break
+
+            logger.error("Login failed: %s", last_error)
+            raise AuthenticationError(f"Login failed: {last_error}")
         except RequestException as e:
             logger.error("Login request exception: %s", e)
             raise AuthenticationError(f"Login request failed: {str(e)}")
@@ -145,7 +154,12 @@ class SNUQ:
         logger.info("Logging in with existing token")
         # Verify token is valid by making a simple request
         try:
-            self._make_request("GET", "/api/hardware/")
+            try:
+                self._make_request("GET", "/api/hardware/backends/")
+            except BackendError as exc:
+                if getattr(exc, "status_code", None) != 404:
+                    raise
+                self._make_request("GET", "/api/hardware/")
         except AuthenticationError:
             self.token = None
             self.session.headers.pop("Authorization", None)
@@ -207,11 +221,17 @@ class SNUQ:
 
             # Handle different status codes
             if response.status_code >= 500:
-                raise QuantumClientError(f"Server error: {response.text}")
+                exc = QuantumClientError(f"Server error: {response.text}")
+                exc.status_code = response.status_code
+                raise exc
             elif response.status_code == 401:
-                raise AuthenticationError("Authentication failed")
+                exc = AuthenticationError("Authentication failed")
+                exc.status_code = response.status_code
+                raise exc
             elif response.status_code == 403:
-                raise AuthenticationError("Permission denied")
+                exc = AuthenticationError("Permission denied")
+                exc.status_code = response.status_code
+                raise exc
             elif response.status_code >= 400:
                 try:
                     error_data = response.json() if response.text else {"detail": "Unknown error"}
@@ -219,13 +239,15 @@ class SNUQ:
                     error_data = {"detail": response.text or "Unknown error"}
                 error_message = error_data.get("detail") or error_data.get("error") or error_data.get("message") or "Operation failed"
                 if "job" in endpoint:
-                    raise JobError(error_message)
+                    exc = JobError(error_message)
                 elif "experiment" in endpoint:
-                    raise ExperimentError(error_message)
+                    exc = ExperimentError(error_message)
                 elif "backend" in endpoint or "hardware" in endpoint:
-                    raise BackendError(error_message)
+                    exc = BackendError(error_message)
                 else:
-                    raise QuantumClientError(error_message)
+                    exc = QuantumClientError(error_message)
+                exc.status_code = response.status_code
+                raise exc
 
             # Parse response
             try:
@@ -290,6 +312,17 @@ class SNUQ:
                 raise ValueError("Circuit dict (or JSON string) must contain a 'qasm' key.")
         elif isinstance(circuit, dict) and "qasm" in circuit:
             qasm = circuit["qasm"]
+        elif hasattr(circuit, "qasm") and getattr(circuit, "qasm"):
+            qasm = circuit.qasm
+        elif hasattr(circuit, "to_dict"):
+            circuit_dict = circuit.to_dict()
+            if circuit_dict.get("qasm"):
+                qasm = circuit_dict["qasm"]
+            else:
+                try:
+                    qasm = dumps(circuit.to_qiskit())
+                except Exception:
+                    qasm = json.dumps(circuit_dict)
         else:
             raise ValueError("Circuit must be a QuantumCircuit, a dict (or JSON string) with a 'qasm' key.")
         # Prepare job data (using a dict with a 'qasm' key)
@@ -303,7 +336,12 @@ class SNUQ:
             job_data["experiment_type"] = "EXPVAL"
 
         # Create job
-        response = self._make_request("POST", "/api/runner/jobs/create/", data=job_data)
+        try:
+            response = self._make_request("POST", "/api/runner/jobs/create/", data=job_data)
+        except JobError as exc:
+            if getattr(exc, "status_code", None) != 404:
+                raise
+            response = self._make_request("POST", "/api/runner/jobs/", data=job_data)
         logger.info("Job created with ID %s", response.get("id"))
         return BlackholeJob.from_dict(response)
 
@@ -347,8 +385,17 @@ class SNUQ:
             BlackholeResult object containing the job results
         """
         logger.debug("Fetching results for job %s", job_id)
-        response = self._make_request("GET", f"/api/runner/archives/{job_id}/")
+        try:
+            response = self._make_request("GET", f"/api/runner/jobs/{job_id}/results/")
+        except JobError as exc:
+            if getattr(exc, "status_code", None) != 404:
+                raise
+            response = self._make_request("GET", f"/api/runner/archives/{job_id}/")
         return BlackholeResult.from_dict(response)
+
+    def get_job_results(self, job_id: int) -> BlackholeResult:
+        """Backward-compatible alias for get_results."""
+        return self.get_results(job_id)
 
     def cancel_job(self, job_id: int) -> bool:
         """
@@ -388,6 +435,7 @@ class SNUQ:
         """
         logger.info("Waiting for job %s", job_id)
         start_time = time.time()
+        ion_loss_seen = False
         
         while time.time() - start_time < timeout:
             try:
@@ -400,7 +448,19 @@ class SNUQ:
                 
                 if job.status == "completed":
                     logger.info("Job %s completed", job_id)
+                    if job.processed_results is None:
+                        try:
+                            return True, self.get_job_results(job_id)
+                        except JobError:
+                            pass
                     return True, job
+                elif job.status == "ion_lost":
+                    ion_loss_seen = True
+                    logger.error(
+                        "Job %s paused after ion loss: %s",
+                        job_id,
+                        job.error_message or "backend inspection required",
+                    )
                 elif job.status == "error":
                     logger.error("Job %s errored: %s", job_id, job.error_message)
                     return False, {"error": job.error_message or "Job failed"}
@@ -415,6 +475,15 @@ class SNUQ:
                 return False, {"error": str(e)}
 
         logger.error("Timeout waiting for job %s completion", job_id)
+        if ion_loss_seen:
+            return False, {
+                "error": (
+                    "Ion loss was detected and the backend is waiting for inspection. "
+                    "The job remains queued for retry when service resumes."
+                ),
+                "error_type": "ion_loss",
+                "status": "ion_lost",
+            }
         return False, {"error": "Timeout waiting for job completion"}
 
     # Experiment Management Methods
@@ -467,7 +536,12 @@ class SNUQ:
             Each item has .name, .graph_data, .pending_jobs (and legacy fields = None).
         """
         logger.debug("Listing available backends")
-        response = self._make_request("GET", "/api/hardware/")
+        try:
+            response = self._make_request("GET", "/api/hardware/backends/")
+        except BackendError as exc:
+            if getattr(exc, "status_code", None) != 404:
+                raise
+            response = self._make_request("GET", "/api/hardware/")
         return [SNUBackend.from_dict(obj) for obj in response]
 
 
@@ -479,11 +553,19 @@ class SNUQ:
         and expects `?name=<backend>` as a query parameter.
         """
         logger.debug("Fetching backend status for %s", backend_name)
-        return self._make_request(
-            "GET",
-            "/api/status/",
-            params={"name": backend_name},
-        )
+        try:
+            return self._make_request(
+                "GET",
+                f"/api/hardware/status/{backend_name}/",
+            )
+        except BackendError as exc:
+            if getattr(exc, "status_code", None) != 404:
+                raise
+            return self._make_request(
+                "GET",
+                "/api/status/",
+                params={"name": backend_name},
+            )
     
     def run(
         self,
@@ -550,6 +632,8 @@ class SNUQ:
         if not ok:
             # `res_or_err` is an error dict from wait_for_job
             msg = res_or_err.get("error", "Unknown job failure")
+            if res_or_err.get("error_type") == "ion_loss":
+                raise IonLossError(f"Job {job.id} paused after ion loss: {msg}")
             raise JobError(f"Job {job.id} failed: {msg}")
 
         logger.info("Job %s completed successfully", job.id)
@@ -664,6 +748,8 @@ class SNUQ:
         if not ok:
             # `res_or_err` is an error dict from wait_for_job
             msg = res_or_err.get("error", "Unknown job failure")
+            if res_or_err.get("error_type") == "ion_loss":
+                raise IonLossError(f"Job {job.id} paused after ion loss: {msg}")
             raise JobError(f"Job {job.id} failed: {msg}")
         
         logger.info("Expectation value job %s completed", job.id)
