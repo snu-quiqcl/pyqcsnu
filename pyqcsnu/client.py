@@ -358,7 +358,10 @@ class SNUQ:
         params = {"status": status} if status else None
         logger.debug("Listing jobs with params %s", params)
         response = self._make_request("GET", "/api/runner/jobs/", params=params)
-        return [BlackholeJob.from_dict(job_data) for job_data in response]
+        jobs = [BlackholeJob.from_dict(job_data) for job_data in response]
+        if status:
+            jobs = [job for job in jobs if job.status == status]
+        return jobs
 
     def get_job(self, job_id: int) -> BlackholeJob:
         """
