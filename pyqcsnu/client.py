@@ -24,6 +24,7 @@ from .exceptions import (
     AuthenticationError,
     JobError,
     IonLossError,
+    ModeInterruptedError,
     ExperimentError,
     BackendError,
 )
@@ -439,6 +440,7 @@ class SNUQ:
         logger.info("Waiting for job %s", job_id)
         start_time = time.time()
         ion_loss_seen = False
+        mode_interrupted_seen = False
         
         while time.time() - start_time < timeout:
             try:
@@ -464,6 +466,13 @@ class SNUQ:
                         job_id,
                         job.error_message or "backend inspection required",
                     )
+                elif job.status == "mode_interrupted":
+                    mode_interrupted_seen = True
+                    logger.warning(
+                        "Job %s paused after backend mode interruption: %s",
+                        job_id,
+                        job.error_message or "backend is not in service mode",
+                    )
                 elif job.status == "error":
                     logger.error("Job %s errored: %s", job_id, job.error_message)
                     return False, {"error": job.error_message or "Job failed"}
@@ -486,6 +495,15 @@ class SNUQ:
                 ),
                 "error_type": "ion_loss",
                 "status": "ion_lost",
+            }
+        if mode_interrupted_seen:
+            return False, {
+                "error": (
+                    "The backend entered experiment mode while the job was in flight. "
+                    "The job remains queued for retry when service resumes."
+                ),
+                "error_type": "mode_interrupted",
+                "status": "mode_interrupted",
             }
         return False, {"error": "Timeout waiting for job completion"}
 

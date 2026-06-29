@@ -22,6 +22,7 @@ from .exceptions import (
     AuthenticationError,
     JobError,
     IonLossError,
+    ModeInterruptedError,
     ExperimentError,
     BackendError
 )
@@ -41,6 +42,7 @@ __all__ = [
     'AuthenticationError',
     'JobError',
     'IonLossError',
+    'ModeInterruptedError',
     'ExperimentError',
     'BackendError',
 ]

@@ -22,6 +22,10 @@ class IonLossError(JobError):
     """Raised when a job is paused because hardware ion loss was detected."""
     pass
 
+class ModeInterruptedError(JobError):
+    """Raised when a job is paused because the backend left service mode."""
+    pass
+
 class ExperimentError(QuantumClientError):
     """Raised when an experiment operation fails."""
     pass
