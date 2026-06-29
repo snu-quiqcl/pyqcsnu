@@ -32,7 +32,7 @@ endpoints under `PYQCSNU_BASE_URL`, which defaults to `http://localhost:8000`.
 | PyQCSNU method | Method | Endpoint | Notes |
 | --- | --- | --- | --- |
 | `list_backends()` | `GET` | `/api/hardware/` | Lists `QuantumHardware` records |
-| `get_backend_status(name)` | `GET` | `/api/status/?name={name}` | Returns `name`, `pending_jobs`, and `active` |
+| `get_backend_status(name)` | `GET` | `/api/hardware/status/?name={name}` | Returns `name`, `pending_jobs`, and `active` |
 
 ## Result Shape
 

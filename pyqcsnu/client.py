@@ -549,23 +549,15 @@ class SNUQ:
         """
         Get live job-queue length for a single backend.
 
-        The `hardware-status` view is mounted at `/api/status/`
+        The `hardware-status` view is mounted at `/api/hardware/status/`
         and expects `?name=<backend>` as a query parameter.
         """
         logger.debug("Fetching backend status for %s", backend_name)
-        try:
-            return self._make_request(
-                "GET",
-                f"/api/hardware/status/{backend_name}/",
-            )
-        except BackendError as exc:
-            if getattr(exc, "status_code", None) != 404:
-                raise
-            return self._make_request(
-                "GET",
-                "/api/status/",
-                params={"name": backend_name},
-            )
+        return self._make_request(
+            "GET",
+            "/api/hardware/status/",
+            params={"name": backend_name},
+        )
     
     def run(
         self,

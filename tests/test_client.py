@@ -387,7 +387,7 @@ def test_backend_management(client, mock_responses):
     
     mock_responses.add(
         responses.GET,
-        f"{TEST_BASE_URL}/api/hardware/status/Cassiopeia/",
+        f"{TEST_BASE_URL}/api/hardware/status/?name=Cassiopeia",
         json=status_data,
         status=200
     )
