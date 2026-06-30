@@ -24,7 +24,7 @@ from qiskit.quantum_info import SparsePauliOp
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from pyqcsnu import SNUQ
+from pyqcsnu import SNUQ, SNUQBackend
 
 LOCAL_BASE_URL = "http://localhost:8000"
 LOCAL_USERNAME = "admin"
@@ -49,9 +49,23 @@ def load_local_env() -> None:
 
 
 def get_client() -> SNUQ:
-    client = SNUQ()
+    base_url = os.getenv("PYQCSNU_BASE_URL", LOCAL_BASE_URL)
+    client = SNUQ(base_url=base_url)
     client.login(LOCAL_USERNAME, LOCAL_PASSWORD)
     return client
+
+
+def resolve_backend(client: SNUQ) -> SNUQBackend:
+    backends = client.list_backends()
+    if not backends:
+        raise RuntimeError("No SNUQ backends are available.")
+    backend_name = os.getenv("PYQCSNU_BACKEND")
+    if backend_name:
+        for backend in backends:
+            if backend.name == backend_name:
+                return backend
+        raise RuntimeError(f"Backend {backend_name!r} was not found.")
+    return backends[0]
 
 
 def build_circuit() -> QuantumCircuit:
@@ -64,7 +78,8 @@ def build_circuit() -> QuantumCircuit:
 def main() -> None:
     load_local_env()
 
-    backend = "Trinity"
+    client = get_client()
+    backend = resolve_backend(client)
     circuit = build_circuit()
     observable = SparsePauliOp.from_list([
         ("ZZ", 1.0),
@@ -75,7 +90,7 @@ def main() -> None:
     print(circuit.draw(output="text"))
     print(f"\nObservable: {observable}")
 
-    expval = get_client().expval(circuit, observable, backend)
+    expval = client.expval(circuit, observable, backend)
     print(f"\nExpectation value: {expval}")
 
 

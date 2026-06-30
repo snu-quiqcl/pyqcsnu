@@ -7,11 +7,13 @@ import pytest
 import responses
 from datetime import datetime
 from unittest.mock import patch
-from qiskit import QuantumCircuit
+from qiskit import QuantumCircuit, transpile
 from qiskit.circuit.library import HGate, CXGate, RXGate
+from qiskit.providers import BackendV2, JobV1
 
 from pyqcsnu import (
     SNUQ,
+    SNUQBackend,
     Circuit,
     Job,
     Result,
@@ -19,9 +21,11 @@ from pyqcsnu import (
     MitigationParams,
     AuthenticationError,
     JobError,
+    BackendError,
     QuantumClientError
 )
 from pyqcsnu.exceptions import APIError
+from pyqcsnu.backend import normalize_counts_for_qiskit
 
 # Test data
 TEST_TOKEN = "e9df270d2fc9ae6118cfaa00f7d295676d983b10"
@@ -374,9 +378,11 @@ def test_backend_management(client, mock_responses):
     backends = client.list_backends()
     assert len(backends) == 1
     assert isinstance(backends[0], Backend)
+    assert isinstance(backends[0], BackendV2)
     assert backends[0].name == "Cassiopeia"
     assert backends[0].status == "online"
     assert backends[0].n_qubits == 5
+    assert "cx" in backends[0].operation_names
     
     # Test backend status
     status_data = {
@@ -395,6 +401,51 @@ def test_backend_management(client, mock_responses):
     status = client.get_backend_status("Cassiopeia")
     assert status["status"] == "online"
     assert status["queue_length"] == 2
+
+def test_get_backend(client, mock_responses):
+    """Test retrieving a backend object by name."""
+    backends_data = [
+        {
+            "name": "Cassiopeia",
+            "status": "online",
+            "n_qubits": 5,
+            "capabilities": {
+                "max_shots": 10000,
+                "supported_gates": ["h", "cx", "x", "y", "z"],
+            },
+        }
+    ]
+
+    mock_responses.add(
+        responses.GET,
+        f"{TEST_BASE_URL}/api/hardware/backends/",
+        json=backends_data,
+        status=200,
+    )
+    mock_responses.add(
+        responses.GET,
+        f"{TEST_BASE_URL}/api/hardware/backends/",
+        json=backends_data,
+        status=200,
+    )
+
+    assert client.get_backend().name == "Cassiopeia"
+    assert client.get_backend("Cassiopeia").name == "Cassiopeia"
+
+def test_get_backend_requires_name_when_multiple(client, mock_responses):
+    """Test that unnamed backend lookup is rejected when multiple are available."""
+    mock_responses.add(
+        responses.GET,
+        f"{TEST_BASE_URL}/api/hardware/backends/",
+        json=[
+            {"name": "Cassiopeia", "n_qubits": 5},
+            {"name": "Trinity", "n_qubits": 2},
+        ],
+        status=200,
+    )
+
+    with pytest.raises(BackendError):
+        client.get_backend()
 
 def test_create_job_with_qiskit_circuit(client, mock_responses):
     """Test creating a job with a Qiskit circuit."""
@@ -501,3 +552,283 @@ def test_circuit_with_parameters():
     qc2 = circuit.to_qiskit()
     assert qc2.data[0][0].params[0] == 0.5
     assert qc2.data[1][0].params[0] == 0.3 
+
+def test_run_requires_snuq_backend(client):
+    """Test that client.run expects an SNUQBackend instance."""
+    qc = QuantumCircuit(1, 1)
+    qc.measure(0, 0)
+
+    with pytest.raises(TypeError):
+        client.run(qc, backend="Cassiopeia")
+
+def test_client_run_with_snuq_backend(client, mock_responses):
+    """Test running a circuit with an SNUQBackend instance."""
+    backend = SNUQBackend(
+        client=client,
+        name="Cassiopeia",
+        n_qubits=1,
+        metadata={"capabilities": {"supported_gates": ["measure"]}},
+    )
+    qc = QuantumCircuit(1, 1, name="client_run")
+    qc.measure(0, 0)
+
+    mock_responses.add(
+        responses.POST,
+        f"{TEST_BASE_URL}/api/runner/jobs/create/",
+        json={
+            "id": 7,
+            "status": "created",
+            "circuit": Circuit.from_qiskit(qc).to_dict(),
+            "backend": "Cassiopeia",
+            "shots": 128,
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        },
+        status=201,
+    )
+    mock_responses.add(
+        responses.GET,
+        f"{TEST_BASE_URL}/api/runner/jobs/7/",
+        json={
+            "id": 7,
+            "status": "completed",
+            "circuit": Circuit.from_qiskit(qc).to_dict(),
+            "backend": "Cassiopeia",
+            "shots": 128,
+            "processed_results": {"counts": {"0": 80, "1": 48}},
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        },
+        status=200,
+    )
+
+    result = client.run(qc, backend=backend, shots=128)
+
+    assert result.backend_name == "Cassiopeia"
+    assert result.get_counts() == {"0": 80, "1": 48}
+    assert result.results[0].meas_level == 2
+
+def test_snuq_backend_run_returns_qiskit_job(client, mock_responses):
+    """Test BackendV2.run returns a Qiskit job and supports circuit lists."""
+    backend = SNUQBackend(client=client, name="Cassiopeia", n_qubits=1)
+    circuits = []
+    for idx in range(2):
+        qc = QuantumCircuit(1, 1, name=f"backend_run_{idx}")
+        qc.measure(0, 0)
+        circuits.append(qc)
+
+    for idx, qc in enumerate(circuits, start=1):
+        mock_responses.add(
+            responses.POST,
+            f"{TEST_BASE_URL}/api/runner/jobs/create/",
+            json={
+                "id": idx,
+                "status": "created",
+                "circuit": Circuit.from_qiskit(qc).to_dict(),
+                "backend": "Cassiopeia",
+                "shots": 64,
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+            },
+            status=201,
+        )
+        mock_responses.add(
+            responses.GET,
+            f"{TEST_BASE_URL}/api/runner/jobs/{idx}/",
+            json={
+                "id": idx,
+                "status": "completed",
+                "circuit": Circuit.from_qiskit(qc).to_dict(),
+                "backend": "Cassiopeia",
+                "shots": 64,
+                "processed_results": {"counts": {"0": 64 - idx, "1": idx}},
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+            },
+            status=200,
+        )
+
+    job = backend.run(circuits, shots=64)
+    result = job.result()
+
+    assert isinstance(job, JobV1)
+    assert job.backend() is backend
+    assert result.job_id == "1,2"
+    assert len(result.results) == 2
+    assert result.get_counts(0) == {"0": 63, "1": 1}
+    assert result.get_counts(1) == {"0": 62, "1": 2}
+
+def test_snuq_backend_job_result_reads_results_endpoint(client, mock_responses):
+    """Test BackendV2 job result handles completed jobs without inline results."""
+    backend = SNUQBackend(client=client, name="TISimulator", n_qubits=1)
+    qc = QuantumCircuit(1, 1, name="results_endpoint")
+    qc.metadata = {"ideal_probabilities": {"0": 1.0}}
+    qc.measure(0, 0)
+
+    mock_responses.add(
+        responses.POST,
+        f"{TEST_BASE_URL}/api/runner/jobs/create/",
+        json={
+            "id": 9,
+            "status": "created",
+            "circuit": Circuit.from_qiskit(qc).to_dict(),
+            "backend": "TISimulator",
+            "shots": 32,
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        },
+        status=201,
+    )
+    mock_responses.add(
+        responses.GET,
+        f"{TEST_BASE_URL}/api/runner/jobs/9/",
+        json={
+            "id": 9,
+            "status": "completed",
+            "circuit": Circuit.from_qiskit(qc).to_dict(),
+            "backend": "TISimulator",
+            "shots": 32,
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        },
+        status=200,
+    )
+    mock_responses.add(
+        responses.GET,
+        f"{TEST_BASE_URL}/api/runner/jobs/9/results/",
+        json={
+            "job_id": 9,
+            "backend": "TISimulator",
+            "shots": 32,
+            "processed_results": {"counts": {"0": 30, "1": 2}},
+        },
+        status=200,
+    )
+
+    result = backend.run(qc, shots=32).result()
+
+    assert result.get_counts() == {"0": 30, "1": 2}
+    assert result.results[0].header["metadata"] == {"ideal_probabilities": {"0": 1.0}}
+
+def test_snuq_backend_job_status_done_after_result(client, mock_responses):
+    """Test completed job remains DONE even if later status polling fails."""
+    backend = SNUQBackend(client=client, name="TISimulator", n_qubits=1)
+    qc = QuantumCircuit(1, 1)
+    qc.measure(0, 0)
+
+    mock_responses.add(
+        responses.POST,
+        f"{TEST_BASE_URL}/api/runner/jobs/create/",
+        json={
+            "id": 10,
+            "status": "created",
+            "circuit": Circuit.from_qiskit(qc).to_dict(),
+            "backend": "TISimulator",
+            "shots": 16,
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        },
+        status=201,
+    )
+    mock_responses.add(
+        responses.GET,
+        f"{TEST_BASE_URL}/api/runner/jobs/10/",
+        json={
+            "id": 10,
+            "status": "completed",
+            "circuit": Circuit.from_qiskit(qc).to_dict(),
+            "backend": "TISimulator",
+            "shots": 16,
+            "processed_results": {"counts": {"0": 16}},
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        },
+        status=200,
+    )
+
+    job = backend.run(qc, shots=16)
+    job.result()
+
+    assert job.status().name == "DONE"
+
+def test_snuq_backend_target_supports_common_transpiler_output():
+    """Test target accepts u/cx/barrier/measure circuits."""
+    backend = SNUQBackend(
+        name="Cassiopeia",
+        n_qubits=3,
+        native_gates=[{"unexpected": "shape"}],
+    )
+    qc = QuantumCircuit(3, 3)
+    qc.u(0.1, 0.2, 0.3, 0)
+    qc.cx(0, 1)
+    qc.barrier()
+    qc.measure([0, 1, 2], [0, 1, 2])
+
+    transpiled = transpile(qc, backend=backend)
+
+    assert {"u", "cx", "barrier", "measure"}.issubset(set(backend.operation_names))
+    assert transpiled.num_qubits == 3
+
+def test_snuq_backend_reads_controlserver_native_graph_data():
+    """Test native gates and links are read from controlserver graph_data."""
+    backend = SNUQBackend(
+        name="TISimulator",
+        graph_data={
+            "nodes": [
+                {"id": 0, "supported_gates": ["gpi", "gpi2", "measure"]},
+                {"id": 1, "supported_gates": ["gpi", "gpi2", "measure"]},
+            ],
+            "links": [
+                {"source": 0, "target": 1, "gate_type": "xx"},
+            ],
+        },
+    )
+
+    assert backend.controlserver_native_gates == ["gpi", "gpi2", "measure", "xx"]
+    assert {"gpi", "gpi2", "xx", "measure"}.issubset(set(backend.operation_names))
+    assert {"u", "cx"}.issubset(set(backend.operation_names))
+    assert list(backend.coupling_map.get_edges()) == [(0, 1)]
+
+def test_counts_are_projected_to_classical_width():
+    """Test full-device simulator counts are projected to measured clbits."""
+    qc = QuantumCircuit(5, 3)
+    qc.measure([0, 1, 2], [0, 1, 2])
+
+    counts = normalize_counts_for_qiskit(
+        {
+            "00000": 1,
+            "00001": 2,
+            "00010": 4,
+            "00100": 8,
+            "10000": 16,
+        },
+        qc,
+    )
+
+    assert counts == {
+        "000": 17,
+        "001": 2,
+        "010": 4,
+        "100": 8,
+    }
+
+def test_counts_projection_respects_measurement_mapping():
+    """Test count projection follows qargs to cargs mapping."""
+    qc = QuantumCircuit(5, 3)
+    qc.measure(2, 0)
+    qc.measure(0, 2)
+
+    counts = normalize_counts_for_qiskit(
+        {
+            "00001": 3,
+            "00100": 5,
+            "00101": 7,
+        },
+        qc,
+    )
+
+    assert counts == {
+        "100": 3,
+        "001": 5,
+        "101": 7,
+    }

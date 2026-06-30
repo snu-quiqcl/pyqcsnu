@@ -5,6 +5,7 @@ PyQCSNU - Python Client for SNU Quantum Computing Services
 __version__ = "0.1.0"
 
 from .client import SNUQ
+from .backend import SNUQBackend, SNUQJob
 from .models import (
     Circuit,
     BlackholeJob,
@@ -16,7 +17,7 @@ from .models import (
 
 Job = BlackholeJob
 Result = BlackholeResult
-Backend = SNUBackend
+Backend = SNUQBackend
 from .exceptions import (
     QuantumClientError,
     AuthenticationError,
@@ -29,6 +30,8 @@ from .exceptions import (
 
 __all__ = [
     'SNUQ',
+    'SNUQBackend',
+    'SNUQJob',
     'Circuit',
     'Job',
     'Result',

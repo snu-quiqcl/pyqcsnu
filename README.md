@@ -47,6 +47,7 @@ from pyqcsnu import SNUQ
 client = SNUQ()
 client.login("userid", "userpw")    
 # client.login_with_token("your_token")     # or via endowed TOKEN
+backend = client.list_backends()[0]
 
 # 2  Build a circuit
 qc = QuantumCircuit(2, 2)
@@ -55,7 +56,7 @@ qc.cx(0, 1)
 qc.measure([0, 1], [0, 1])
 
 # 3  Run & get a Qiskit Result
-result = client.run(qc, backend="Blackhole", shots=2048)   # qiskit.result.Result instance
+result = client.run(qc, backend=backend, shots=2048)   # qiskit.result.Result instance
 print(result.get_counts())  # {'00': 1012, '11': 1036}
 ```
 
@@ -77,7 +78,7 @@ print(result.get_counts())  # {'00': 1012, '11': 1036}
 * `BlackholeJob`       – job metadata & status
 * `BlackholeResult`    – counts / probabilities / metadata
 * `BlackholeExperiment`– low‑level pulse‑level run information
-* `SNUBackend`         – static & live backend specs
+* `SNUQBackend`        – Qiskit `BackendV2` adapter for static & live backend specs
 * `MitigationParams`   – optional error‑mitigation settings
 
 Each model is a Pydantic `BaseModel`, so you can `.model_dump()` them straight
@@ -90,7 +91,8 @@ to JSON or build them via `.model_validate()`.
 ### Submit now, fetch later
 
 ```python
-job = client.create_job(qc, backend="Blackhole", shots=5000)
+backend = client.list_backends()[0]
+job = client.create_job(qc, backend=backend, shots=5000)
 print(job.id, job.status)
 
 # ... do other work ...
@@ -139,7 +141,8 @@ against the mock proxy.
 from pyqcsnu.exceptions import AuthenticationError, JobError
 
 try:
-    result = client.run(qc, backend="faulty_backend")   
+    backend = client.list_backends()[0]
+    result = client.run(qc, backend=backend)
 except AuthenticationError:
     print("⚠️  Please log in first.")
 except JobError as e:

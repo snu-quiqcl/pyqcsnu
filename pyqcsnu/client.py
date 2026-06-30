@@ -18,7 +18,8 @@ from qiskit.quantum_info import Pauli, SparsePauliOp
 from qiskit.qasm2 import dumps
 import numpy as np
 
-from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, SNUBackend, MitigationParams, Hamiltonian
+from .models import BlackholeJob, BlackholeExperiment, BlackholeResult, MitigationParams, Hamiltonian
+from .backend import SNUQBackend, ensure_backend, normalize_counts_for_qiskit
 from .exceptions import (
     QuantumClientError,
     AuthenticationError,
@@ -96,6 +97,8 @@ class SNUQ:
         self.session.headers.update({"Authorization": f"Token {token}"})
         logger.debug("Authentication token set")
 
+    # Login with username and password is an unsafe method. Only used for test purposes.
+    
     def login(self, username: str, password: str) -> bool:
         """
         Authenticate with the API server and get a token.
@@ -140,6 +143,7 @@ class SNUQ:
         except RequestException as e:
             logger.error("Login request exception: %s", e)
             raise AuthenticationError(f"Login request failed: {str(e)}")
+        
 
     def login_with_token(self, token: str) -> None:
         """
@@ -267,7 +271,7 @@ class SNUQ:
     def create_job(
         self,
         circuit: Union[QuantumCircuit, Dict, str],
-        backend: str,
+        backend: Union[str, SNUQBackend],
         shots: int = 1024,
         mitigation_params: Optional[MitigationParams] = None,
         hamiltonian: Optional[Hamiltonian] = None,
@@ -295,7 +299,8 @@ class SNUQ:
         if not self.token:
             raise AuthenticationError("Not authenticated. Call login() first.")
 
-        logger.info("Creating job on backend %s", backend)
+        backend_name = backend.name if isinstance(backend, SNUQBackend) else backend
+        logger.info("Creating job on backend %s", backend_name)
         qasm = None
         if isinstance(circuit, QuantumCircuit):
             try:
@@ -327,7 +332,7 @@ class SNUQ:
         else:
             raise ValueError("Circuit must be a QuantumCircuit, a dict (or JSON string) with a 'qasm' key.")
         # Prepare job data (using a dict with a 'qasm' key)
-        job_data = { "circuit_info": qasm, "backend": backend, "shots": shots }
+        job_data = { "circuit_info": qasm, "backend": backend_name, "shots": shots }
         if mitigation_params:
             job_data["mitigation_params"] = mitigation_params.to_dict()
         if name:
@@ -547,13 +552,13 @@ class SNUQ:
         return BlackholeExperiment.from_dict(response)
 
     # Backend Management Methods
-    def list_backends(self) -> List[SNUBackend]:
+    def list_backends(self) -> List[SNUQBackend]:
         """
         Retrieve every hardware record.
 
         Returns
         -------
-        List[SNUBackend]
+        List[SNUQBackend]
             Each item has .name, .graph_data, .pending_jobs (and legacy fields = None).
         """
         logger.debug("Listing available backends")
@@ -563,7 +568,34 @@ class SNUQ:
             if getattr(exc, "status_code", None) != 404:
                 raise
             response = self._make_request("GET", "/api/hardware/")
-        return [SNUBackend.from_dict(obj) for obj in response]
+        return [SNUQBackend.from_dict(obj, client=self) for obj in response]
+
+    def get_backend(self, name: Optional[str] = None) -> SNUQBackend:
+        """
+        Return a configured SNUQ backend by name.
+
+        If *name* is omitted and exactly one backend is available, that backend
+        is returned. If multiple backends are available, pass the backend name
+        explicitly.
+        """
+        backends = self.list_backends()
+        if not backends:
+            raise BackendError("No SNUQ backends are available.")
+
+        if name is None:
+            if len(backends) == 1:
+                return backends[0]
+            available = ", ".join(backend.name for backend in backends)
+            raise BackendError(
+                f"Multiple SNUQ backends are available. Specify one of: {available}"
+            )
+
+        for backend in backends:
+            if backend.name == name:
+                return backend
+
+        available = ", ".join(backend.name for backend in backends)
+        raise BackendError(f"Backend {name!r} was not found. Available: {available}")
 
 
     def get_backend_status(self, backend_name: str) -> Dict[str, Any]:
@@ -583,7 +615,7 @@ class SNUQ:
     def run(
         self,
         circuit: QuantumCircuit,
-        backend: str,
+        backend: SNUQBackend,
         *,
         shots: int = 1024,
         mitigation_params: Optional[MitigationParams] = None,
@@ -599,7 +631,7 @@ class SNUQ:
         circuit
             The QuantumCircuit to execute.
         backend
-            Backend name recognised by the server.
+            SNUQBackend instance recognised by the server.
         shots
             Number of shots for execution.
         mitigation_params
@@ -625,11 +657,12 @@ class SNUQ:
         TimeoutError
             If the job is not finished within *timeout* seconds.
         """
-        logger.info("Running circuit on backend %s", backend)
+        backend = ensure_backend(backend, client=self)
+        logger.info("Running circuit on backend %s", backend.name)
         # 1. Submit
         job = self.create_job(
             circuit=circuit,
-            backend=backend,
+            backend=backend.name,
             shots=shots,
             mitigation_params=mitigation_params,
             name=name,
@@ -655,9 +688,10 @@ class SNUQ:
         processed_results = completed_job.processed_results or {}
         if "counts" not in processed_results:
             raise JobError(f"Job {job.id} completed without counts in processed_results")
+        counts = normalize_counts_for_qiskit(processed_results["counts"], circuit)
         result_dict = {
-            "backend_name": backend,
-            "backend_version": "0.0.1",
+            "backend_name": backend.name,
+            "backend_version": backend.backend_version,
             #"qobj_id": None,    # deprecated in Qiskit 2.x
             "job_id": str(job.id),
             "success": True,
@@ -666,13 +700,16 @@ class SNUQ:
                     "shots": shots,
                     "status": "DONE",
                     "success": True,
+                    "meas_level": 2,
+                    "meas_return": "single",
                     "header": {
                         "name": name or f"SNUQ-run-{datetime.now(timezone.utc).isoformat()}",
                         "memory_slots": circuit.num_clbits,
                         "n_qubits": circuit.num_qubits,
+                        "metadata": circuit.metadata or {},
                     },
                     "data": {
-                        "counts": {k: v for k, v in processed_results["counts"].items()},
+                        "counts": counts,
                     },
                 }
             ],
@@ -682,7 +719,7 @@ class SNUQ:
     def expval(self,
         circuit: QuantumCircuit,
         operators: Union[Pauli, SparsePauliOp],
-        backend: str,
+        backend: SNUQBackend,
         *,
         shots: int = 1024,
         mitigation_params: Optional[MitigationParams] = None,
@@ -691,7 +728,7 @@ class SNUQ:
         timeout: int = 300,
     ) -> float:
         """
-        Submit `circuit` and `hamiltonian`, block until it finishes, and return a Qiskit `Result`.
+        Submit `circuit` and `hamiltonian`, block until it finishes, and return an expectation value.
 
         Parameters
         ----------
@@ -700,7 +737,7 @@ class SNUQ:
         hamiltonian
             The Hamiltonian to evaluate.
         backend
-            Backend name recognised by the server.
+            SNUQBackend instance recognised by the server.
         shots
             Number of shots for execution.
         mitigation_params
@@ -718,7 +755,8 @@ class SNUQ:
             The expectation value of the Hamiltonian.
         """
 
-        logger.info("Running expectation value on backend %s", backend)
+        backend = ensure_backend(backend, client=self)
+        logger.info("Running expectation value on backend %s", backend.name)
 
         num_qubits = circuit.num_qubits
 
@@ -746,7 +784,7 @@ class SNUQ:
         
         job = self.create_job(
             circuit=circuit,
-            backend=backend,
+            backend=backend.name,
             hamiltonian=operators,
             shots=shots,
             mitigation_params=mitigation_params,
