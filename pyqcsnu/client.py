@@ -42,7 +42,7 @@ class SNUQ:
     """Client for interacting with the SNU quantum computing services API."""
     
     # Default base URL - DO NOT MODIFY
-    BASE_URL = "http://qservice.snu.ac.kr"
+    BASE_URL = "https://qservice.snu.ac.kr"
     
     def __init__(
         self,
