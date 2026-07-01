@@ -41,8 +41,8 @@ logging.basicConfig(
 class SNUQ:
     """Client for interacting with the SNU quantum computing services API."""
     
-    # Default base URL - will be overridden by environment variable
-    BASE_URL = "http://localhost:8000"
+    # Default base URL - DO NOT MODIFY
+    BASE_URL = "http://qservice.snu.ac.kr"
     
     def __init__(
         self,
@@ -688,7 +688,11 @@ class SNUQ:
         processed_results = completed_job.processed_results or {}
         if "counts" not in processed_results:
             raise JobError(f"Job {job.id} completed without counts in processed_results")
-        counts = normalize_counts_for_qiskit(processed_results["counts"], circuit)
+        counts = normalize_counts_for_qiskit(
+            processed_results["counts"],
+            circuit,
+            source_bit_order=backend.counts_bit_order,
+        )
         result_dict = {
             "backend_name": backend.name,
             "backend_version": backend.backend_version,

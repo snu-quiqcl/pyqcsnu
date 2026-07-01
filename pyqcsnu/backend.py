@@ -106,6 +106,7 @@ class SNUQBackend(BackendV2):
         n_qubits: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
         max_circuits: Optional[int] = 1,
+        counts_bit_order: Optional[str] = None,
         **fields,
     ):
         self._client = client
@@ -117,6 +118,7 @@ class SNUQBackend(BackendV2):
         self.native_gates = native_gates or []
         self.controlserver_native_gates = self._controlserver_native_gate_names()
         self.metadata = metadata or {}
+        self.counts_bit_order = counts_bit_order or self.metadata.get("counts_bit_order") or _default_counts_bit_order(name)
         self._num_qubits = num_qubits or n_qubits or self._infer_num_qubits()
         self._max_circuits = max_circuits
         self._target = None
@@ -161,6 +163,7 @@ class SNUQBackend(BackendV2):
                 "status",
                 "n_qubits",
                 "metadata",
+                "counts_bit_order",
             }:
                 metadata.setdefault(key, value)
         capabilities = data.get("capabilities", {})
@@ -187,6 +190,7 @@ class SNUQBackend(BackendV2):
             n_qubits=data.get("n_qubits", data.get("num_qubits")),
             metadata=metadata,
             max_circuits=max_circuits,
+            counts_bit_order=data.get("counts_bit_order"),
             **fields,
         )
 
@@ -203,6 +207,7 @@ class SNUQBackend(BackendV2):
             "n_qubits": self.n_qubits,
             "metadata": self.metadata,
             "controlserver_native_gates": self.controlserver_native_gates,
+            "counts_bit_order": self.counts_bit_order,
         }
 
     @property
@@ -229,6 +234,7 @@ class SNUQBackend(BackendV2):
 
         run_options = dict(self.options.__dict__)
         run_options.update(options)
+        run_options.setdefault("counts_bit_order", self.counts_bit_order)
 
         circuits = _as_circuit_list(run_input)
         service_jobs = [
@@ -470,7 +476,11 @@ def _experiment_result_dict(
     processed_results = _processed_results(job)
     if "counts" not in processed_results:
         raise JobError(f"Job {_service_job_id(job)} completed without counts in processed_results")
-    counts = normalize_counts_for_qiskit(processed_results["counts"], circuit)
+    counts = normalize_counts_for_qiskit(
+        processed_results["counts"],
+        circuit,
+        source_bit_order=options.get("counts_bit_order", "qiskit"),
+    )
     header = {
         "name": options.get("name") or circuit.name or f"SNUQ-run-{datetime.now(timezone.utc).isoformat()}",
         "memory_slots": circuit.num_clbits,
@@ -491,7 +501,11 @@ def _experiment_result_dict(
     }
 
 
-def normalize_counts_for_qiskit(counts: Dict[str, int], circuit: QuantumCircuit) -> Dict[str, int]:
+def normalize_counts_for_qiskit(
+    counts: Dict[str, int],
+    circuit: QuantumCircuit,
+    source_bit_order: str = "qiskit",
+) -> Dict[str, int]:
     """Project service count strings onto Qiskit's classical-bit display order."""
     if not counts or circuit.num_clbits == 0:
         return {key: int(value) for key, value in counts.items()}
@@ -507,13 +521,20 @@ def normalize_counts_for_qiskit(counts: Dict[str, int], circuit: QuantumCircuit)
             normalized[str(raw_key)] = normalized.get(str(raw_key), 0) + int(value)
             continue
 
-        if len(key) == circuit.num_clbits and _is_identity_measurement(measurement_map):
+        if (
+            source_bit_order == "qiskit"
+            and len(key) == circuit.num_clbits
+            and _is_identity_measurement(measurement_map)
+        ):
             normalized[key] = normalized.get(key, 0) + int(value)
             continue
 
         classical_bits = ["0"] * circuit.num_clbits
         for qubit_index, clbit_index in measurement_map.items():
-            source_index = len(key) - 1 - qubit_index
+            if source_bit_order == "hardware":
+                source_index = qubit_index
+            else:
+                source_index = len(key) - 1 - qubit_index
             target_index = circuit.num_clbits - 1 - clbit_index
             if 0 <= source_index < len(key) and 0 <= target_index < circuit.num_clbits:
                 classical_bits[target_index] = key[source_index]
@@ -540,6 +561,12 @@ def _measurement_map(circuit: QuantumCircuit) -> Dict[int, int]:
 
 def _is_identity_measurement(measurement_map: Dict[int, int]) -> bool:
     return all(qubit == clbit for qubit, clbit in measurement_map.items())
+
+
+def _default_counts_bit_order(backend_name: str) -> str:
+    if "simulator" in (backend_name or "").lower():
+        return "qiskit"
+    return "hardware"
 
 
 def _processed_results(job: Union[BlackholeJob, BlackholeResult]) -> Dict[str, Any]:

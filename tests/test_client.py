@@ -832,3 +832,45 @@ def test_counts_projection_respects_measurement_mapping():
         "001": 5,
         "101": 7,
     }
+
+def test_hardware_order_counts_are_reversed_to_qiskit_display_order():
+    """Test Trinity/PMT-style q0q1q2 keys become Qiskit c2c1c0 keys."""
+    qc = QuantumCircuit(3, 3)
+    qc.measure([0, 1, 2], [0, 1, 2])
+
+    counts = normalize_counts_for_qiskit(
+        {
+            "100": 3,
+            "010": 5,
+            "001": 7,
+        },
+        qc,
+        source_bit_order="hardware",
+    )
+
+    assert counts == {
+        "001": 3,
+        "010": 5,
+        "100": 7,
+    }
+
+def test_qiskit_order_counts_remain_unchanged_for_simulator_width_counts():
+    """Test TISimulator-style qiskit display keys are not reversed."""
+    qc = QuantumCircuit(3, 3)
+    qc.measure([0, 1, 2], [0, 1, 2])
+
+    counts = normalize_counts_for_qiskit(
+        {
+            "001": 3,
+            "010": 5,
+            "100": 7,
+        },
+        qc,
+        source_bit_order="qiskit",
+    )
+
+    assert counts == {
+        "001": 3,
+        "010": 5,
+        "100": 7,
+    }
